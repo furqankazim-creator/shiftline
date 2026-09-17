@@ -20,7 +20,7 @@ export function SetupPage() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-4xl px-6 py-7 flex flex-col gap-7">
+      <div className="mx-auto max-w-4xl px-4 sm:px-6 py-5 sm:py-7 flex flex-col gap-7">
         <header>
           <h1 className="text-[19px] font-semibold tracking-[-0.015em]">Setup</h1>
           <p className="mt-0.5 text-[12.5px] text-ink-2">
@@ -91,7 +91,7 @@ export function SetupPage() {
                 <button
                   key={code.id}
                   onClick={() => setEditingCode(code)}
-                  className="grid w-full grid-cols-[56px_1fr_120px_84px_72px_20px] items-center gap-3 bg-[var(--surface)] px-4 py-2.5 text-left hover:bg-[var(--surface-2)] transition-colors"
+                  className="grid w-full grid-cols-[56px_1fr_64px_20px] md:grid-cols-[56px_1fr_120px_84px_72px_20px] items-center gap-3 bg-[var(--surface)] px-3 md:px-4 py-2.5 text-left hover:bg-[var(--surface-2)] transition-colors"
                 >
                   <span
                     className={cx(
@@ -103,11 +103,11 @@ export function SetupPage() {
                     {code.id}
                   </span>
                   <span className="text-[13px]">{code.label}</span>
-                  <span className="font-mono text-[11.5px] text-ink-3">{code.timing}</span>
+                  <span className="hidden md:block font-mono text-[11.5px] text-ink-3">{code.timing}</span>
                   <span className="text-[11.5px] text-ink-3">
                     {code.minHeadcount > 0 ? `min ${code.minHeadcount}` : '—'}
                   </span>
-                  <span className="text-[11px] text-ink-3">
+                  <span className="hidden md:block text-[11px] text-ink-3">
                     {code.isStatus ? 'status' : code.rotates ? 'rotates' : 'fixed'}
                   </span>
                   <span className="text-ink-3">›</span>
@@ -272,7 +272,7 @@ function Section({
 }) {
   return (
     <section>
-      <div className="mb-2.5 flex items-end gap-3">
+      <div className="mb-2.5 flex flex-wrap items-end gap-3">
         <div>
           <h2 className="text-[14px] font-semibold">{title}</h2>
           <p className="mt-0.5 text-[12px] text-ink-3">{description}</p>
@@ -329,7 +329,7 @@ function CodeEditor({
           </Field>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Timing">
             <Input value={draft.timing} onChange={(e) => setDraft({ ...draft, timing: e.target.value })} />
           </Field>

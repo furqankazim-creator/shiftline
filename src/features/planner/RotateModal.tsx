@@ -93,7 +93,7 @@ export function RotateModal({ open, onClose }: { open: boolean; onClose: () => v
         </div>
 
         {result && (
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {codes
               .filter((c) => c.rotates && !c.isStatus)
               .map((code) => {

@@ -33,8 +33,8 @@ export function PeoplePage() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-4xl px-6 py-7">
-        <header className="mb-5 flex items-end gap-3">
+      <div className="mx-auto max-w-4xl px-4 sm:px-6 py-5 sm:py-7">
+        <header className="mb-5 flex flex-wrap items-end gap-3">
           <div>
             <h1 className="text-[19px] font-semibold tracking-[-0.015em]">People</h1>
             <p className="mt-0.5 text-[12.5px] text-ink-2">
@@ -64,12 +64,12 @@ export function PeoplePage() {
         </header>
 
         <div className="overflow-hidden rounded-xl border border-[var(--line)]">
-          <div className="grid grid-cols-[1fr_120px_84px_120px_90px_36px] gap-3 bg-[var(--surface-3)] px-4 py-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-3">
+          <div className="grid grid-cols-[1fr_56px_92px_24px] md:grid-cols-[1fr_120px_84px_120px_90px_36px] gap-3 bg-[var(--surface-3)] px-3 md:px-4 py-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-3">
             <span>Name</span>
-            <span>Contact</span>
+            <span className="hidden md:block">Contact</span>
             <span>Shift</span>
             <span>Rest days</span>
-            <span>Rotation</span>
+            <span className="hidden md:block">Rotation</span>
             <span />
           </div>
 
@@ -83,7 +83,7 @@ export function PeoplePage() {
                 <button
                   key={employee.id}
                   onClick={() => setEditing(employee)}
-                  className="grid w-full grid-cols-[1fr_120px_84px_120px_90px_36px] items-center gap-3 bg-[var(--surface)] px-4 py-2.5 text-left hover:bg-[var(--surface-2)] transition-colors"
+                  className="grid w-full grid-cols-[1fr_56px_92px_24px] md:grid-cols-[1fr_120px_84px_120px_90px_36px] items-center gap-3 bg-[var(--surface)] px-3 md:px-4 py-2.5 text-left hover:bg-[var(--surface-2)] transition-colors"
                 >
                   <span className="flex items-center gap-2 min-w-0">
                     <span className="h-4 w-[3px] rounded-full shrink-0" style={{ background: tone.accent }} />
@@ -94,7 +94,7 @@ export function PeoplePage() {
                       </span>
                     )}
                   </span>
-                  <span className="font-mono text-[11.5px] text-ink-3 truncate">{employee.contact || '—'}</span>
+                  <span className="hidden md:block font-mono text-[11.5px] text-ink-3 truncate">{employee.contact || '—'}</span>
                   <span
                     className="justify-self-start rounded px-1.5 py-0.5 font-mono text-[11px] font-bold"
                     style={{ background: tone.bg, color: tone.fg }}
@@ -106,7 +106,7 @@ export function PeoplePage() {
                       ? employee.restDays.map((d) => WEEKDAY_LABELS[d].slice(0, 2)).join(' + ')
                       : '—'}
                   </span>
-                  <span className="font-mono text-[11px] text-ink-3">
+                  <span className="hidden md:block font-mono text-[11px] text-ink-3">
                     {rotations.length > 1 ? `${rotations.length} blocks` : '—'}
                   </span>
                   <span className="text-ink-3 text-[13px] justify-self-end">›</span>
@@ -196,7 +196,7 @@ function EmployeeEditor({
       }
     >
       <div className="flex flex-col gap-4">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Name">
             <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
           </Field>
@@ -208,7 +208,7 @@ function EmployeeEditor({
           </Field>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Default shift" hint="Used on any working day no rotation covers.">
             <Select
               value={draft.defaultShift}
@@ -285,7 +285,7 @@ function EmployeeEditor({
           ) : (
             <div className="flex flex-col gap-1.5">
               {rotations.map((rule, i) => (
-                <div key={i} className="flex items-center gap-2">
+                <div key={i} className="flex flex-wrap items-center gap-2">
                   <Select
                     value={rule.code}
                     onChange={(e) => {
@@ -366,7 +366,7 @@ function EmployeeEditor({
           ) : (
             <div className="flex flex-col gap-1.5">
               {myLeave.map((block) => (
-                <div key={block.id} className="flex items-center gap-2">
+                <div key={block.id} className="flex flex-wrap items-center gap-2">
                   <Select
                     value={block.code}
                     onChange={(e) => void saveLeave({ ...block, code: e.target.value })}
@@ -376,19 +376,19 @@ function EmployeeEditor({
                       <option key={c.id} value={c.id}>{c.id}</option>
                     ))}
                   </Select>
+                  <Button size="sm" onClick={() => void removeLeave(block.id)} className="px-2 ml-auto sm:order-last sm:ml-0">✕</Button>
                   <Input
                     type="date"
                     value={block.from}
                     onChange={(e) => void saveLeave({ ...block, from: e.target.value })}
-                    className="h-8 flex-1 text-[12px]"
+                    className="h-8 flex-1 min-w-[140px] text-[12px]"
                   />
                   <Input
                     type="date"
                     value={block.to}
                     onChange={(e) => void saveLeave({ ...block, to: e.target.value })}
-                    className="h-8 flex-1 text-[12px]"
+                    className="h-8 flex-1 min-w-[140px] text-[12px]"
                   />
-                  <Button size="sm" onClick={() => void removeLeave(block.id)} className="px-2">✕</Button>
                 </div>
               ))}
             </div>

@@ -232,11 +232,11 @@ export function ImportModal({
               What was understood
             </div>
             <div className="rounded-xl border border-[var(--line)] overflow-hidden">
-              <div className="grid grid-cols-[1fr_58px_78px_1fr] gap-2 bg-[var(--surface-3)] px-3 py-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-ink-3">
+              <div className="grid grid-cols-[1fr_52px_70px] sm:grid-cols-[1fr_58px_78px_1fr] gap-2 bg-[var(--surface-3)] px-3 py-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-ink-3">
                 <span>Name</span>
                 <span>Shift</span>
                 <span>Rest days</span>
-                <span>Rotation</span>
+                <span className="hidden sm:block">Rotation</span>
               </div>
               <div className="max-h-[240px] overflow-y-auto divide-y divide-[var(--line)]">
                 {result.employees.map((row, i) => {
@@ -244,7 +244,7 @@ export function ImportModal({
                   return (
                     <div
                       key={i}
-                      className="grid grid-cols-[1fr_58px_78px_1fr] items-center gap-2 px-3 py-1.5 bg-[var(--surface-2)]"
+                      className="grid grid-cols-[1fr_52px_70px] sm:grid-cols-[1fr_58px_78px_1fr] items-center gap-2 px-3 py-1.5 bg-[var(--surface-2)]"
                     >
                       <span className="truncate text-[12px]">{row.name}</span>
                       <span
@@ -258,7 +258,7 @@ export function ImportModal({
                           ? row.restDays.map((d) => WEEKDAY_LABELS[d].slice(0, 2)).join('+')
                           : '—'}
                       </span>
-                      <span className="truncate font-mono text-[10.5px] text-ink-3">
+                      <span className="hidden sm:block truncate font-mono text-[10.5px] text-ink-3">
                         {row.rotations.length
                           ? row.rotations.map((r) => `${r.code}:${r.fromDay}-${r.toDay}`).join(' ')
                           : 'none'}

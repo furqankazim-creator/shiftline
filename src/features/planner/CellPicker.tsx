@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import { useEffect, useRef } from 'react';
 
 import { useStore } from '@/app/store';
+import { useCoarsePointer } from '@/app/useViewport';
 import { toneVars } from '@/app/tones';
 import { cx } from '@/components/ui';
 import { OFF } from '@/domain/types';
@@ -28,6 +29,7 @@ export function CellPicker({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const { codes } = useStore();
+  const touch = useCoarsePointer();
 
   useEffect(() => {
     // Close on any mousedown outside the picker. The grid opens the picker on
@@ -114,11 +116,11 @@ export function CellPicker({
         })}
       </div>
 
-      <p className="mt-2 px-1 text-[10.5px] text-ink-3 leading-snug">
+      {!touch && <p className="mt-2 px-1 text-[10.5px] text-ink-3 leading-snug">
         Tip: with a cell focused, just type <span className="font-mono text-ink-2">M</span>{' '}
         <span className="font-mono text-ink-2">E</span> <span className="font-mono text-ink-2">N</span>{' '}
         or <span className="font-mono text-ink-2">-</span>.
-      </p>
+      </p>}
     </motion.div>
   );
 }

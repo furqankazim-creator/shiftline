@@ -43,9 +43,12 @@ function Shell() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="no-print flex shrink-0 items-center gap-3 border-b border-[var(--line)] bg-[var(--surface)] px-4 h-12">
+      <header
+        className="no-print flex shrink-0 items-center gap-2 sm:gap-3 border-b border-[var(--line)] bg-[var(--surface)] px-3 sm:px-4 h-12"
+        style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
+      >
         <Logo />
-        <div className="flex flex-col leading-none">
+        <div className="hidden sm:flex flex-col leading-none">
           <span className="text-[13.5px] font-bold tracking-[-0.02em]">
             Shift<span className="text-ink-2 font-semibold">Line</span>
           </span>
@@ -54,7 +57,7 @@ function Shell() {
           </span>
         </div>
 
-        <nav className="ml-6 flex items-center gap-0.5">
+        <nav className="ml-1 sm:ml-6 flex items-center gap-0.5">
           {([
             ['planner', 'Planner'],
             ['people', 'People'],

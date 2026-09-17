@@ -115,7 +115,7 @@ export function GenerateModal({ open, onClose, onDone }: { open: boolean; onClos
 
         {preview && (
           <>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <Stat label="Cells changing" value={preview.changed} />
               <Stat
                 label="Coverage errors"

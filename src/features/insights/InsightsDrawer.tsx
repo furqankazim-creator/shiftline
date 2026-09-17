@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useMemo, useState } from 'react';
 
 import { useStore } from '@/app/store';
+import { useViewport } from '@/app/useViewport';
 import { toneVars } from '@/app/tones';
 import { Button, Segmented, cx } from '@/components/ui';
 import { monthTotals } from '@/domain/summary';
@@ -21,20 +22,13 @@ export function InsightsDrawer({
 }) {
   const [tab, setTab] = useState<Tab>('issues');
   const { issues } = useStore();
+  const viewport = useViewport();
+  const overlay = viewport !== 'desktop';
 
   const errors = issues.filter((i) => i.severity === 'error').length;
 
-  return (
-    <AnimatePresence>
-      {open && (
-        <motion.aside
-          initial={{ width: 0, opacity: 0 }}
-          animate={{ width: 336, opacity: 1 }}
-          exit={{ width: 0, opacity: 0 }}
-          transition={{ type: 'spring', stiffness: 380, damping: 36 }}
-          className="no-print shrink-0 overflow-hidden border-l border-[var(--line)] bg-[var(--surface)]"
-        >
-          <div className="w-[336px] h-full flex flex-col">
+  const panel = (
+    <div className={overlay ? 'w-full h-full flex flex-col' : 'w-[336px] h-full flex flex-col'}>
             <header className="flex items-center gap-2 px-4 h-14 border-b border-[var(--line)]">
               <h2 className="text-[13px] font-semibold">Insights</h2>
               {errors > 0 && (
@@ -62,7 +56,49 @@ export function InsightsDrawer({
               {tab === 'coverage' && <CoverageTab />}
               {tab === 'fairness' && <FairnessTab />}
             </div>
-          </div>
+    </div>
+  );
+
+  // Small screens: slide over the grid with a scrim instead of pushing it.
+  if (overlay) {
+    return (
+      <AnimatePresence>
+        {open && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={onClose}
+              className="no-print fixed inset-0 z-40 bg-black/50"
+            />
+            <motion.aside
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', stiffness: 380, damping: 38 }}
+              className="no-print fixed inset-y-0 right-0 z-50 w-full max-w-[400px] border-l border-[var(--line)] bg-[var(--surface)] shadow-pop"
+              style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
+            >
+              {panel}
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+    );
+  }
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.aside
+          initial={{ width: 0, opacity: 0 }}
+          animate={{ width: 336, opacity: 1 }}
+          exit={{ width: 0, opacity: 0 }}
+          transition={{ type: 'spring', stiffness: 380, damping: 36 }}
+          className="no-print shrink-0 overflow-hidden border-l border-[var(--line)] bg-[var(--surface)]"
+        >
+          {panel}
         </motion.aside>
       )}
     </AnimatePresence>

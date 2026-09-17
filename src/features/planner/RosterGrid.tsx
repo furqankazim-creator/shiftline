@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useStore } from '@/app/store';
+import { useViewport } from '@/app/useViewport';
 import { toneVars } from '@/app/tones';
 import { cx } from '@/components/ui';
 import { todayIndex } from '@/domain/calendar';
@@ -9,9 +10,12 @@ import { OFF, type Issue, type ShiftCode } from '@/domain/types';
 
 import { CellPicker } from './CellPicker';
 
-const NAME_COL = 228;
-const CELL_W = 38;
-const CELL_H = 30;
+/** Grid metrics per layout tier. Touch targets grow on small screens. */
+const METRICS = {
+  desktop: { name: 228, cell: 38, row: 30 },
+  tablet: { name: 180, cell: 40, row: 34 },
+  mobile: { name: 132, cell: 40, row: 38 },
+} as const;
 
 export interface Focus {
   employeeId: string;
@@ -38,6 +42,9 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
   const {
     roster, employees, codes, columns, days, issues, settings, paintCell, paintRange,
   } = useStore();
+  const viewport = useViewport();
+  const { name: NAME_COL, cell: CELL_W, row: CELL_H } = METRICS[viewport];
+  const showContact = viewport === 'desktop';
 
   const [focus, setFocus] = useState<Focus | null>(null);
   const [picker, setPicker] = useState<{ focus: Focus; x: number; y: number } | null>(null);
@@ -74,7 +81,7 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
     setFlashDay(jumpTo.dayIndex);
     const t = setTimeout(() => setFlashDay(null), 1600);
     return () => clearTimeout(t);
-  }, [jumpTo, employees]);
+  }, [jumpTo, employees, NAME_COL, CELL_W, CELL_H]);
 
   /** Cell-level issue lookup, so a cell can paint its own warning ring. */
   const issueMap = useMemo(() => {
@@ -125,6 +132,10 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
     }
   };
 
+  // On touch screens a tap fires emulated mouse events after touchend, which
+  // already routes through onCellDown / the window mouseup. A finger dragged
+  // across cells scrolls the grid instead of painting, which is the right
+  // trade on a phone — painting a run there is done tap by tap.
   const onCellEnter = (employeeId: string, dayIndex: number) => {
     if (!drag.current || drag.current.employeeId !== employeeId) return;
     drag.current.to = dayIndex;
@@ -267,10 +278,12 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
                     className="h-4 w-[3px] rounded-full shrink-0"
                     style={{ background: toneVars(codeById.get(employee.defaultShift)?.tone ?? 'off').accent }}
                   />
-                  <span className="truncate text-[12.5px] font-medium">{employee.name}</span>
-                  <span className="ml-auto font-mono text-[10.5px] text-ink-3 shrink-0">
-                    {employee.contact}
-                  </span>
+                  <span className={cx('truncate font-medium', viewport === 'mobile' ? 'text-[11.5px]' : 'text-[12.5px]')}>{employee.name}</span>
+                  {showContact && (
+                    <span className="ml-auto font-mono text-[10.5px] text-ink-3 shrink-0">
+                      {employee.contact}
+                    </span>
+                  )}
                 </div>
 
                 {columns.map((col) => {

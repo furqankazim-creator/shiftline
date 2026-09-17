@@ -199,7 +199,7 @@ export function Modal({
   return (
     <AnimatePresence>
       {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -214,7 +214,7 @@ export function Modal({
             exit={{ opacity: 0, scale: 0.98, y: 4 }}
             transition={{ type: 'spring', stiffness: 420, damping: 32 }}
             style={{ width, maxWidth: '100%' }}
-            className="relative max-h-[86vh] overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-pop flex flex-col"
+            className="relative w-full max-h-[92vh] sm:max-h-[86vh] overflow-hidden rounded-t-2xl sm:rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-pop flex flex-col"
           >
             <header className="px-5 pt-4 pb-3 border-b border-[var(--line)]">
               <h2 className="text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>
@@ -222,7 +222,10 @@ export function Modal({
             </header>
             <div className="px-5 py-4 overflow-y-auto flex-1">{children}</div>
             {footer && (
-              <footer className="px-5 py-3 border-t border-[var(--line)] bg-[var(--surface-2)] flex items-center justify-end gap-2">
+              <footer
+                className="px-5 py-3 border-t border-[var(--line)] bg-[var(--surface-2)] flex flex-wrap items-center justify-end gap-2"
+                style={{ paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))' }}
+              >
                 {footer}
               </footer>
             )}

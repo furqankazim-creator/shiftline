@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { useStore } from '@/app/store';
+import { useViewport } from '@/app/useViewport';
 import { useToast } from '@/components/ui';
 import { InsightsDrawer } from '@/features/insights/InsightsDrawer';
 import { ImportModal } from '@/features/io/ImportModal';
@@ -21,7 +22,8 @@ export function PlannerPage() {
   const [rotateOpen, setRotateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
-  const [insightsOpen, setInsightsOpen] = useState(true);
+  const viewport = useViewport();
+  const [insightsOpen, setInsightsOpen] = useState(() => viewport === 'desktop');
   const [jumpTo, setJumpTo] = useState<JumpTarget | null>(null);
 
   useEffect(() => {

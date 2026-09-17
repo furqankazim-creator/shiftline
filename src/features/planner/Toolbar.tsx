@@ -1,6 +1,8 @@
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
+import { useEffect, useRef, useState } from 'react';
 
 import { useStore } from '@/app/store';
+import { useViewport } from '@/app/useViewport';
 import { toneVars } from '@/app/tones';
 import { Button, Select, cx } from '@/components/ui';
 import { MONTH_NAMES } from '@/domain/calendar';
@@ -23,13 +25,26 @@ export function Toolbar({
   const { settings, lines, codes, setLine, setMonth, stepMonth, issues, undo, redo } = useStore();
   const errors = issues.filter((i) => i.severity === 'error').length;
   const warnings = issues.length - errors;
+  const viewport = useViewport();
+  const compact = viewport !== 'desktop';
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [menuOpen]);
 
   const years = Array.from({ length: 7 }, (_, i) => settings.activeYear - 2 + i);
 
   return (
     <div className="no-print shrink-0 border-b border-[var(--line)] bg-[var(--surface)]">
       {/* ------------------------------------------------------- row one */}
-      <div className="flex items-center gap-2 px-4 h-14">
+      <div className="flex flex-wrap items-center gap-2 px-3 md:px-4 py-2 min-h-14">
         <Select
           value={settings.activeLineId}
           onChange={(e) => setLine(e.target.value)}
@@ -65,21 +80,60 @@ export function Toolbar({
 
         <div className="mx-1 h-5 w-px bg-[var(--line)]" />
 
-        <Button variant="primary" size="sm" onClick={onGenerate}>
-          <BoltIcon /> Generate month
+        <Button variant="primary" size="sm" onClick={onGenerate} title="Generate month">
+          <BoltIcon /> <span className="hidden sm:inline">Generate month</span><span className="sm:hidden">Generate</span>
         </Button>
-        <Button variant="outline" size="sm" onClick={onRotate}>
-          <RotateIcon /> Auto-rotate
-        </Button>
+        {!compact && (
+          <Button variant="outline" size="sm" onClick={onRotate}>
+            <RotateIcon /> Auto-rotate
+          </Button>
+        )}
 
-        <div className="mx-1 h-5 w-px bg-[var(--line)]" />
+        <div className="mx-1 h-5 w-px bg-[var(--line)] hidden sm:block" />
 
         <Button size="sm" onClick={undo} title="Undo (Ctrl+Z)">↶</Button>
         <Button size="sm" onClick={redo} title="Redo (Ctrl+Shift+Z)">↷</Button>
 
         <div className="ml-auto flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={onImport}>Import Excel</Button>
-          <Button size="sm" variant="outline" onClick={onExport}>Export</Button>
+          {!compact && (
+            <>
+              <Button size="sm" variant="outline" onClick={onImport}>Import Excel</Button>
+              <Button size="sm" variant="outline" onClick={onExport}>Export</Button>
+            </>
+          )}
+
+          {compact && (
+            <div ref={menuRef} className="relative">
+              <Button size="sm" variant="outline" onClick={() => setMenuOpen((v) => !v)} title="More actions" className="px-2.5">
+                <DotsIcon />
+              </Button>
+              <AnimatePresence>
+                {menuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                    transition={{ duration: 0.12 }}
+                    className="absolute right-0 top-full z-40 mt-1 w-48 rounded-xl border border-[var(--line-strong)] bg-[var(--surface)] p-1 shadow-pop"
+                  >
+                    {[
+                      ['Auto-rotate', onRotate],
+                      ['Import Excel', onImport],
+                      ['Export', onExport],
+                    ].map(([label, fn]) => (
+                      <button
+                        key={label as string}
+                        onClick={() => { setMenuOpen(false); (fn as () => void)(); }}
+                        className="block w-full rounded-lg px-3 py-2 text-left text-[13px] hover:bg-[var(--surface-2)]"
+                      >
+                        {label as string}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
 
           <button
             onClick={toggleInsights}
@@ -106,13 +160,13 @@ export function Toolbar({
                 Clear
               </span>
             )}
-            Insights
+            <span className="hidden sm:inline">Insights</span>
           </button>
         </div>
       </div>
 
       {/* ------------------------------------------------------- row two */}
-      <div className="flex items-center gap-1.5 px-4 h-11 border-t border-[var(--line)] bg-[var(--surface-2)]">
+      <div className="flex items-center gap-1.5 px-3 md:px-4 h-11 border-t border-[var(--line)] bg-[var(--surface-2)] overflow-x-auto">
         <span className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-3 mr-1">
           Brush
         </span>
@@ -151,7 +205,7 @@ export function Toolbar({
           <motion.span
             initial={{ opacity: 0, x: -4 }}
             animate={{ opacity: 1, x: 0 }}
-            className="ml-2 text-[11.5px] text-ink-3"
+            className="ml-2 text-[11.5px] text-ink-3 whitespace-nowrap hidden md:inline"
           >
             Click or drag across the grid to paint.
           </motion.span>
@@ -176,7 +230,7 @@ function BrushChip({
       onClick={onClick}
       title={hint}
       className={cx(
-        'relative h-7 min-w-[34px] px-2 rounded-md text-[12px] font-mono font-bold transition-all',
+        'relative h-7 min-w-[34px] px-2 rounded-md text-[12px] font-mono font-bold transition-all shrink-0',
         hatched && 'hatch',
         active ? 'ring-2 ring-[var(--accent)] ring-offset-1 ring-offset-[var(--surface-2)]' : 'hover:brightness-125',
         !tone && 'border border-[var(--line-strong)] font-sans font-medium text-ink-2',
@@ -201,6 +255,14 @@ function RotateIcon() {
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
       <path d="M21 12a9 9 0 1 1-3-6.7" />
       <path d="M21 4v5h-5" />
+    </svg>
+  );
+}
+
+function DotsIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" />
     </svg>
   );
 }
