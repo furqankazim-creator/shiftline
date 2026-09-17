@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useStore } from '@/app/store';
@@ -35,6 +35,10 @@ export function RosterGrid({ brush, revealKey }: Props) {
   const drag = useRef<{ employeeId: string; from: number; to: number } | null>(null);
   const [dragPreview, setDragPreview] = useState<{ employeeId: string; from: number; to: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollLeft, setScrollLeft] = useState(0);
+  const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollLeft(e.currentTarget.scrollLeft);
+  }, []);
 
   const codeById = useMemo(() => new Map(codes.map((c) => [c.id, c])), [codes]);
   const today = todayIndex(settings.activeYear, settings.activeMonth);
@@ -152,8 +156,8 @@ export function RosterGrid({ brush, revealKey }: Props) {
   const gridWidth = NAME_COL + columns.length * CELL_W;
 
   return (
-    <>
-      <div ref={scrollRef} className="flex-1 overflow-auto">
+    <div className="flex flex-1 min-h-0 flex-col">
+      <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-auto">
         <div style={{ width: gridWidth, minWidth: '100%' }} className="relative">
           {/* ---------------------------------------------------- header */}
           <div
@@ -303,24 +307,29 @@ export function RosterGrid({ brush, revealKey }: Props) {
             );
           })}
 
-          {/* ---------------------------------------------------- summary */}
-          <SummaryRail
-            // Only tally shifts that matter here: ones with a minimum to police,
-            // or ones actually in use this month. Showing a row of dots for every
-            // configured support code would just eat grid height.
-            codes={codes.filter(
-              (c) =>
-                !c.isStatus &&
-                (c.minHeadcount > 0 || days.some((d) => (d.total[c.id] ?? 0) > 0)),
-            )}
-            days={days}
-            columns={columns}
-            nameWidth={NAME_COL}
-            cellWidth={CELL_W}
-            revealKey={revealKey}
-          />
         </div>
       </div>
+
+      {/* The headcount rail sits *below* the scroll area rather than sticky
+          inside it, so it can never slide over an employee row. It keeps its
+          columns lined up by mirroring the grid's horizontal scroll. */}
+      <SummaryRail
+        // Only tally shifts that matter here: ones with a minimum to police, or
+        // ones actually in use this month.
+        codes={codes.filter(
+          (c) =>
+            !c.isStatus &&
+            (c.minHeadcount > 0 || days.some((d) => (d.total[c.id] ?? 0) > 0)),
+        )}
+        days={days}
+        columns={columns}
+        nameWidth={NAME_COL}
+        cellWidth={CELL_W}
+        gridWidth={gridWidth}
+        revealKey={revealKey}
+        scrollLeft={scrollLeft}
+        issues={issues}
+      />
 
       {picker && (
         <CellPicker
@@ -334,15 +343,21 @@ export function RosterGrid({ brush, revealKey }: Props) {
           onClose={() => setPicker(null)}
         />
       )}
-    </>
+    </div>
   );
 }
+
+const RAIL_KEY = 'shiftline.rail-open';
 
 /**
  * The headcount rows at the foot of the grid.
  *
  * These are the client's own rows 27–32, except they recompute live instead of
  * being re-tallied by hand, and a cell below its minimum paints itself red.
+ *
+ * Collapsible: the bottom-left button opens and closes it like a shutter. When
+ * closed, a one-line strip keeps the per-shift range and the error count in
+ * view so the grid can take the full height without losing the signal.
  */
 function SummaryRail({
   codes,
@@ -350,58 +365,153 @@ function SummaryRail({
   columns,
   nameWidth,
   cellWidth,
+  gridWidth,
   revealKey,
+  scrollLeft,
+  issues,
 }: {
   codes: ShiftCode[];
   days: ReturnType<typeof import('@/domain/summary').summarise>;
   columns: ReturnType<typeof import('@/domain/calendar').buildColumns>;
   nameWidth: number;
   cellWidth: number;
+  gridWidth: number;
   revealKey: number;
+  scrollLeft: number;
+  issues: Issue[];
 }) {
+  const [open, setOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(RAIL_KEY) !== 'closed';
+    } catch {
+      return true;
+    }
+  });
+
+  const toggle = () => {
+    setOpen((v) => {
+      try {
+        localStorage.setItem(RAIL_KEY, v ? 'closed' : 'open');
+      } catch {
+        /* per-viewer convenience only */
+      }
+      return !v;
+    });
+  };
+
+  const shortDays = issues.filter((i) => !i.employeeId && i.severity === 'error').length;
+
   return (
-    <div className="sticky bottom-0 z-30 bg-[var(--surface)]/97 backdrop-blur border-t-2 border-[var(--line-strong)]">
-      {codes.map((code) => {
-        const tone = toneVars(code.tone);
-        return (
-          <div key={code.id} className="flex border-b border-[var(--line)] last:border-b-0">
-            <div
-              className="sticky left-0 z-10 flex items-center gap-2 px-3 bg-[var(--surface)] border-r border-[var(--line-strong)]"
-              style={{ width: nameWidth, minWidth: nameWidth, height: 26 }}
-            >
-              <span className="h-1.5 w-1.5 rounded-full" style={{ background: tone.accent }} />
-              <span className="text-[11px] font-medium text-ink-2">{code.label}</span>
-              {code.minHeadcount > 0 && (
-                <span className="ml-auto font-mono text-[10px] text-ink-3">min {code.minHeadcount}</span>
-              )}
-            </div>
-            {columns.map((col) => {
-              const n = days[col.index]?.total[code.id] ?? 0;
-              const short = code.minHeadcount > 0 && n < code.minHeadcount;
+    <div className="shrink-0 border-t-2 border-[var(--line-strong)] bg-[var(--surface)]">
+      {/* ---------------------------------------------------- toggle strip */}
+      <div className="flex items-center h-8 border-b border-[var(--line)]">
+        <button
+          onClick={toggle}
+          aria-expanded={open}
+          className="flex h-full items-center gap-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-ink-2 hover:text-ink hover:bg-[var(--surface-2)] transition-colors border-r border-[var(--line-strong)]"
+          style={{ width: nameWidth, minWidth: nameWidth }}
+          title={open ? 'Hide headcount rows' : 'Show headcount rows'}
+        >
+          <motion.span
+            animate={{ rotate: open ? 180 : 0 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+            className="grid h-4 w-4 place-items-center rounded bg-[var(--surface-3)] text-[10px]"
+          >
+            ▴
+          </motion.span>
+          Headcount
+          {shortDays > 0 && (
+            <span className="ml-auto rounded-full bg-[var(--sh-leave-bg)] px-1.5 font-mono text-[10px] normal-case tracking-normal text-[var(--danger)]">
+              {shortDays}
+            </span>
+          )}
+        </button>
+
+        {/* When shut, show each shift's range for the month so nothing is lost. */}
+        {!open && (
+          <div className="flex items-center gap-4 px-3 overflow-x-auto">
+            {codes.map((code) => {
+              const tone = toneVars(code.tone);
+              const counts = days.map((d) => d.total[code.id] ?? 0);
+              const lo = Math.min(...counts);
+              const hi = Math.max(...counts);
+              const short = code.minHeadcount > 0 && lo < code.minHeadcount;
               return (
-                <div
-                  key={`${revealKey}-${col.day}`}
-                  className={cx(
-                    'flex items-center justify-center border-r border-[var(--line)] font-mono text-[11px]',
-                    col.isWeekend && 'bg-[var(--weekend-tint)]',
-                  )}
-                  style={{
-                    width: cellWidth,
-                    minWidth: cellWidth,
-                    height: 26,
-                    background: short ? 'var(--sh-leave-bg)' : undefined,
-                    color: short ? 'var(--danger)' : n === 0 ? 'var(--ink-3)' : 'var(--ink-2)',
-                    fontWeight: short ? 700 : 500,
-                  }}
-                  title={short ? `${code.label}: ${n} of ${code.minHeadcount} required` : undefined}
-                >
-                  {n || '·'}
-                </div>
+                <span key={code.id} className="flex items-center gap-1.5 text-[11px] whitespace-nowrap">
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: tone.accent }} />
+                  <span className="text-ink-3">{code.label}</span>
+                  <span
+                    className="font-mono"
+                    style={{ color: short ? 'var(--danger)' : 'var(--ink-2)', fontWeight: short ? 700 : 500 }}
+                  >
+                    {lo}–{hi}
+                  </span>
+                </span>
               );
             })}
           </div>
-        );
-      })}
+        )}
+      </div>
+
+      {/* ---------------------------------------------------- the shutter */}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="rail"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 380, damping: 36, mass: 0.8 }}
+            className="overflow-hidden"
+          >
+            <div className="overflow-hidden">
+              <div style={{ width: gridWidth, transform: `translateX(-${scrollLeft}px)` }}>
+                {codes.map((code) => {
+                  const tone = toneVars(code.tone);
+                  return (
+                    <div key={code.id} className="flex border-b border-[var(--line)] last:border-b-0">
+                      <div
+                        className="sticky left-0 z-10 flex items-center gap-2 px-3 bg-[var(--surface)] border-r border-[var(--line-strong)]"
+                        style={{ width: nameWidth, minWidth: nameWidth, height: 26, transform: `translateX(${scrollLeft}px)` }}
+                      >
+                        <span className="h-1.5 w-1.5 rounded-full" style={{ background: tone.accent }} />
+                        <span className="text-[11px] font-medium text-ink-2">{code.label}</span>
+                        {code.minHeadcount > 0 && (
+                          <span className="ml-auto font-mono text-[10px] text-ink-3">min {code.minHeadcount}</span>
+                        )}
+                      </div>
+                      {columns.map((col) => {
+                        const n = days[col.index]?.total[code.id] ?? 0;
+                        const short = code.minHeadcount > 0 && n < code.minHeadcount;
+                        return (
+                          <div
+                            key={`${revealKey}-${col.day}`}
+                            className={cx(
+                              'flex items-center justify-center border-r border-[var(--line)] font-mono text-[11px]',
+                              col.isWeekend && 'bg-[var(--weekend-tint)]',
+                            )}
+                            style={{
+                              width: cellWidth,
+                              minWidth: cellWidth,
+                              height: 26,
+                              background: short ? 'var(--sh-leave-bg)' : undefined,
+                              color: short ? 'var(--danger)' : n === 0 ? 'var(--ink-3)' : 'var(--ink-2)',
+                              fontWeight: short ? 700 : 500,
+                            }}
+                            title={short ? `${code.label}: ${n} of ${code.minHeadcount} required` : undefined}
+                          >
+                            {n || '·'}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
