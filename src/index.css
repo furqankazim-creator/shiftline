@@ -134,6 +134,24 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Native <select> popups don't inherit the select's styling in Chrome/Firefox,
+   so the option list needs its own colours or it renders dim-on-dark. */
+select {
+  color-scheme: inherit;
+}
+select option,
+select optgroup {
+  background: var(--surface-2);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 13px;
+  padding: 6px 8px;
+}
+select option:checked {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
