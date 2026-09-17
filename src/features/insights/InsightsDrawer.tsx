@@ -97,6 +97,9 @@ function IssuesTab({ onJump }: { onJump: (e: string | undefined, d: number | und
 
   return (
     <div className="flex flex-col">
+      <p className="px-4 py-2.5 text-[11.5px] leading-snug text-ink-3 border-b border-[var(--line)]">
+        Checked on every edit. Click an item to jump to that day on the grid.
+      </p>
       {(['errors', 'warnings'] as const).map((key) => {
         const list = grouped[key];
         if (list.length === 0) return null;
@@ -133,13 +136,16 @@ function IssuesTab({ onJump }: { onJump: (e: string | undefined, d: number | und
                     <p className="text-[12.5px] leading-snug">{issue.message}</p>
                     {canSuggest && (
                       <span className="mt-1 inline-block text-[11px] text-[var(--accent)]">
-                        {isOpen ? 'Hide cover options' : 'Who can cover?'}
+                        {isOpen ? 'Hide suggestions' : 'Show who can cover →'}
                       </span>
                     )}
                   </button>
 
                   {isOpen && suggestions.length > 0 && (
                     <div className="px-4 pb-3 flex flex-col gap-1">
+                      <p className="text-[11px] text-ink-3 mb-0.5">
+                        Off that day, not on leave, lightest month first:
+                      </p>
                       {suggestions.map((emp) => (
                         <button
                           key={emp.id}
@@ -183,6 +189,9 @@ function CoverageTab() {
 
   return (
     <div className="p-4 flex flex-col gap-4">
+      <p className="text-[11.5px] leading-snug text-ink-3">
+        People on each shift, day by day. A red bar is a day below that shift's minimum.
+      </p>
       <div className="grid grid-cols-2 gap-2">
         <MiniStat label="Shift days" value={Object.values(totals.shiftDays).reduce((a, b) => a + b, 0)} />
         <MiniStat label="Rest days" value={totals.offDays} />
@@ -240,6 +249,9 @@ function FairnessTab() {
 
   return (
     <div className="p-4 flex flex-col gap-4">
+      <p className="text-[11.5px] leading-snug text-ink-3">
+        Night shifts worked per person across the months in the tool. Auto-rotate uses this to decide who moves off nights next.
+      </p>
       <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3.5">
         <div className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-3">
           Night-shift spread

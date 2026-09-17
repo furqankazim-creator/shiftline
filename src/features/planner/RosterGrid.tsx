@@ -18,14 +18,23 @@ export interface Focus {
   dayIndex: number;
 }
 
+export interface JumpTarget {
+  employeeId?: string;
+  dayIndex?: number;
+  /** Changes on every request so the same target can be jumped to twice. */
+  nonce: number;
+}
+
 interface Props {
   /** The shift code being painted, or null for select-mode. */
   brush: string | null;
   /** Bumped by the Generate action to replay the reveal animation. */
   revealKey: number;
+  /** Set by the Insights panel: scroll to and highlight this cell or day. */
+  jumpTo: JumpTarget | null;
 }
 
-export function RosterGrid({ brush, revealKey }: Props) {
+export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
   const {
     roster, employees, codes, columns, days, issues, settings, paintCell, paintRange,
   } = useStore();
@@ -42,6 +51,30 @@ export function RosterGrid({ brush, revealKey }: Props) {
 
   const codeById = useMemo(() => new Map(codes.map((c) => [c.id, c])), [codes]);
   const today = todayIndex(settings.activeYear, settings.activeMonth);
+
+  // ---- jump from Insights -------------------------------------------------
+  // Scrolls the requested day into the middle of the view, focuses the cell if
+  // a person was named, and flashes the whole column so the eye lands on it.
+  const [flashDay, setFlashDay] = useState<number | null>(null);
+  useEffect(() => {
+    if (!jumpTo || jumpTo.dayIndex === undefined) return;
+    const el = scrollRef.current;
+    if (el) {
+      const x = NAME_COL + jumpTo.dayIndex * CELL_W - (el.clientWidth - NAME_COL) / 2 + CELL_W / 2;
+      el.scrollTo({ left: Math.max(0, x), behavior: 'smooth' });
+      if (jumpTo.employeeId) {
+        const rowIdx = employees.findIndex((e) => e.id === jumpTo.employeeId);
+        if (rowIdx >= 0) {
+          const y = 46 + rowIdx * CELL_H - el.clientHeight / 2;
+          el.scrollTo({ top: Math.max(0, y), left: Math.max(0, x), behavior: 'smooth' });
+        }
+      }
+    }
+    if (jumpTo.employeeId) setFocus({ employeeId: jumpTo.employeeId, dayIndex: jumpTo.dayIndex });
+    setFlashDay(jumpTo.dayIndex);
+    const t = setTimeout(() => setFlashDay(null), 1600);
+    return () => clearTimeout(t);
+  }, [jumpTo, employees]);
 
   /** Cell-level issue lookup, so a cell can paint its own warning ring. */
   const issueMap = useMemo(() => {
@@ -208,6 +241,14 @@ export function RosterGrid({ brush, revealKey }: Props) {
                   {today === col.index && (
                     <span className="absolute inset-x-0 top-0 h-[2px] bg-[var(--accent)]" />
                   )}
+                  {flashDay === col.index && (
+                    <motion.span
+                      initial={{ opacity: 0.9 }}
+                      animate={{ opacity: 0 }}
+                      transition={{ duration: 1.5, ease: 'easeOut' }}
+                      className="pointer-events-none absolute inset-0 bg-[var(--accent)]/30"
+                    />
+                  )}
                 </div>
               );
             })}
@@ -298,6 +339,14 @@ export function RosterGrid({ brush, revealKey }: Props) {
                         <span
                           className="pointer-events-none absolute inset-0 border-2"
                           style={{ borderColor: 'var(--accent)' }}
+                        />
+                      )}
+                      {flashDay === col.index && (
+                        <motion.span
+                          initial={{ opacity: 0.55 }}
+                          animate={{ opacity: 0 }}
+                          transition={{ duration: 1.5, ease: 'easeOut' }}
+                          className="pointer-events-none absolute inset-0 bg-[var(--accent)]"
                         />
                       )}
                     </motion.button>
@@ -412,14 +461,17 @@ function SummaryRail({
           style={{ width: nameWidth, minWidth: nameWidth }}
           title={open ? 'Hide headcount rows' : 'Show headcount rows'}
         >
-          <motion.span
-            animate={{ rotate: open ? 180 : 0 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-            className="grid h-4 w-4 place-items-center rounded bg-[var(--surface-3)] text-[10px]"
-          >
-            ▴
-          </motion.span>
+          <span className="grid h-5 w-5 place-items-center rounded-md bg-[var(--surface-3)] text-ink-2">
+            <BarsIcon />
+          </span>
           Headcount
+          <motion.span
+            animate={{ rotate: open ? 0 : 180 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+            className="text-ink-3"
+          >
+            <ChevronIcon />
+          </motion.span>
           {shortDays > 0 && (
             <span className="ml-auto rounded-full bg-[var(--sh-leave-bg)] px-1.5 font-mono text-[10px] normal-case tracking-normal text-[var(--danger)]">
               {shortDays}
@@ -513,5 +565,23 @@ function SummaryRail({
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+function BarsIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <rect x="3" y="12" width="4" height="9" rx="1" />
+      <rect x="10" y="6" width="4" height="15" rx="1" />
+      <rect x="17" y="9" width="4" height="12" rx="1" />
+    </svg>
+  );
+}
+
+function ChevronIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m6 15 6-6 6 6" />
+    </svg>
   );
 }

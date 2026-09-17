@@ -7,7 +7,7 @@ import { ImportModal } from '@/features/io/ImportModal';
 import { ExportModal } from '@/features/io/ExportModal';
 
 import { GenerateModal } from './GenerateModal';
-import { RosterGrid } from './RosterGrid';
+import { RosterGrid, type JumpTarget } from './RosterGrid';
 import { RotateModal } from './RotateModal';
 import { Toolbar } from './Toolbar';
 
@@ -22,6 +22,7 @@ export function PlannerPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(true);
+  const [jumpTo, setJumpTo] = useState<JumpTarget | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -52,16 +53,13 @@ export function PlannerPage() {
           insightsOpen={insightsOpen}
           toggleInsights={() => setInsightsOpen((v) => !v)}
         />
-        <RosterGrid brush={brush} revealKey={revealKey} />
+        <RosterGrid brush={brush} revealKey={revealKey} jumpTo={jumpTo} />
       </div>
 
       <InsightsDrawer
         open={insightsOpen}
         onClose={() => setInsightsOpen(false)}
-        onJump={() => {
-          // The grid already rings the offending cell; opening the issue is
-          // enough of a jump at this grid size.
-        }}
+        onJump={(employeeId, dayIndex) => setJumpTo({ employeeId, dayIndex, nonce: Date.now() })}
       />
 
       <GenerateModal
