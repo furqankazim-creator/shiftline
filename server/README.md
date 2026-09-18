@@ -6,15 +6,25 @@ on the server is identical to one generated in the browser.
 
 ## Run locally
 
+**Quickest — no database setup:**
+
 ```bash
 cd server
-cp .env.example .env      # fill in MONGODB_URI, JWT_SECRET, GROQ_API_KEY, ADMIN_*
 npm install
-npm run dev               # http://localhost:4000
+npx tsx scripts/dev-mem.ts     # in-memory MongoDB, http://localhost:4400
 ```
 
-No Atlas yet? `npx tsx scripts/dev-mem.ts` starts it on an in-memory MongoDB
-with `sup@example.com` / `supervisor1`.
+Add `GROQ_API_KEY=gsk_...` to `server/.env` (or the shell) and the chat talks.
+
+**With MongoDB Atlas:**
+
+```bash
+cp .env.example .env      # fill in MONGODB_URI, JWT_SECRET, GROQ_API_KEY, ADMIN_*
+npm run dev               # http://localhost:4400
+```
+
+Port 4400 taken? `PORT=4401 npm run dev` and set `VITE_API_URL=http://localhost:4401`
+in `.env.development`.
 
 ```bash
 npx tsx scripts/smoke.ts  # 19 end-to-end checks against in-memory Mongo
@@ -32,7 +42,7 @@ npm run typecheck
 | `AI_PUBLIC` | default `true`: the chat needs no sign-in. Set `false` to require an account |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | first supervisor, created when the users collection is empty |
 | `CORS_ORIGINS` | comma-separated web origins (the Vercel URL, localhost) |
-| `PORT` | default 4000 |
+| `PORT` | default 4400 |
 
 ## Routes
 

@@ -2,12 +2,19 @@ import 'dotenv/config';
 
 function required(name: string): string {
   const v = process.env[name];
-  if (!v) throw new Error(`Missing required environment variable ${name} — see server/.env.example`);
+  if (!v) {
+    console.error(
+      `\nMissing ${name}.\n` +
+      `  • For real use: copy server/.env.example to server/.env and fill it in.\n` +
+      `  • To try it now with no setup: npx tsx scripts/dev-mem.ts (in-memory database)\n`,
+    );
+    process.exit(1);
+  }
   return v;
 }
 
 export const config = {
-  port: Number(process.env.PORT ?? 4000),
+  port: Number(process.env.PORT ?? 4400),
   mongoUri: required('MONGODB_URI'),
   jwtSecret: required('JWT_SECRET'),
   groqApiKey: process.env.GROQ_API_KEY ?? '',

@@ -37,7 +37,18 @@ async function main() {
   await mongoose.connect(config.mongoUri);
   console.log('MongoDB connected');
   await seedAdmin();
-  app.listen(config.port, () => console.log(`ShiftLine API on http://localhost:${config.port}`));
+  const server = app.listen(config.port, () => console.log(`ShiftLine API on http://localhost:${config.port}`));
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(
+        `\nPort ${config.port} is already used by another program on this machine.\n` +
+        `  Start with a different port, e.g.  PORT=${config.port + 1} npm run dev\n` +
+        `  and set VITE_API_URL=http://localhost:${config.port + 1} for the web app (.env.development).\n`,
+      );
+      process.exit(1);
+    }
+    throw err;
+  });
 }
 
 main().catch((e) => {
