@@ -1,0 +1,412 @@
+<title>ShiftLine User Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+  :root {
+    --paper: #f6f7fa; --surface: #ffffff; --ink: #1c2130; --ink-2: #4b5468; --ink-3: #7d8598;
+    --rule: #e1e4ec; --rule-strong: #c9ceda; --accent: #0f5f8f; --accent-soft: #e4eef6;
+    --sh-m: #c97f0d; --sh-m-bg: #fbeacb; --sh-e: #0e8a90; --sh-e-bg: #cdeff0;
+    --sh-n: #4356d6; --sh-n-bg: #dcdffb; --sh-gs: #2d8a51; --sh-gs-bg: #d5f0de;
+    --sh-p: #8342c4; --sh-p-bg: #e8d9f7; --sh-lv: #b3252f; --sh-lv-bg: #f8d5d8;
+    --ok: #17864f; --warn: #a16207; --err: #b3252f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0f1218; --surface: #161a23; --ink: #eceff5; --ink-2: #aab2c3; --ink-3: #737c8e;
+      --rule: #262c3a; --rule-strong: #38405240; --accent: #6fb3e0; --accent-soft: #17273a;
+      --sh-m: #f0b25a; --sh-m-bg: #3a2b10; --sh-e: #4fd0d6; --sh-e-bg: #0f3234;
+      --sh-n: #9aa7ff; --sh-n-bg: #22284f; --sh-gs: #6fd39a; --sh-gs-bg: #133423;
+      --sh-p: #c79bf3; --sh-p-bg: #2f1d47; --sh-lv: #ff8a93; --sh-lv-bg: #3f1a1e;
+      --ok: #4ec98b; --warn: #f5b74e; --err: #ff6b6b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0f1218; --surface: #161a23; --ink: #eceff5; --ink-2: #aab2c3; --ink-3: #737c8e;
+    --rule: #262c3a; --rule-strong: #38405240; --accent: #6fb3e0; --accent-soft: #17273a;
+    --sh-m: #f0b25a; --sh-m-bg: #3a2b10; --sh-e: #4fd0d6; --sh-e-bg: #0f3234;
+    --sh-n: #9aa7ff; --sh-n-bg: #22284f; --sh-gs: #6fd39a; --sh-gs-bg: #133423;
+    --sh-p: #c79bf3; --sh-p-bg: #2f1d47; --sh-lv: #ff8a93; --sh-lv-bg: #3f1a1e;
+    --ok: #4ec98b; --warn: #f5b74e; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding-block: 40px 80px; padding-inline: 24px; display: grid; grid-template-columns: 220px 1fr; gap: 56px; }
+  @media (max-width: 860px) { .wrap { grid-template-columns: 1fr; gap: 28px; } nav.toc { position: static; } }
+  nav.toc { position: sticky; top: env(safe-area-inset-top, 0px); align-self: start; padding-top: 6px; }
+  nav.toc .eyebrow { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; margin-bottom: 10px; }
+  nav.toc a { display: block; color: var(--ink-2); text-decoration: none; font-size: 13.5px; padding: 5px 0 5px 12px; border-left: 2px solid var(--rule); }
+  nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); border-left-color: var(--accent); outline: none; }
+  main { min-width: 0; }
+  header.hero { border-bottom: 1px solid var(--rule); padding-bottom: 28px; margin-bottom: 36px; }
+  .kicker { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  h1 { font-size: clamp(30px, 4vw, 40px); line-height: 1.1; margin: 8px 0 12px; letter-spacing: -.02em; text-wrap: balance; font-weight: 700; }
+  .lede { font-size: 17px; color: var(--ink-2); max-width: 62ch; margin: 0; }
+  section { margin-bottom: 52px; scroll-margin-top: 20px; }
+  h2 { font-size: 22px; letter-spacing: -.015em; margin: 0 0 6px; text-wrap: balance; }
+  h3 { font-size: 16px; margin: 26px 0 8px; }
+  .sub { color: var(--ink-3); margin: 0 0 18px; font-size: 14px; }
+  p { max-width: 68ch; margin: 0 0 12px; }
+  ul { max-width: 68ch; padding-left: 20px; margin: 0 0 12px; }
+  li { margin-bottom: 5px; }
+  code, kbd { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: .92em; }
+  code { background: var(--accent-soft); color: var(--ink); padding: 1px 6px; border-radius: 4px; }
+  kbd { display: inline-block; border: 1px solid var(--rule-strong); border-bottom-width: 2px; border-radius: 5px; padding: 0 7px; background: var(--surface); font-size: 12.5px; line-height: 1.7; }
+  .steps { counter-reset: step; list-style: none; padding: 0; margin: 0; max-width: 72ch; }
+  .steps > li { counter-increment: step; display: grid; grid-template-columns: 34px 1fr; gap: 14px; padding: 14px 0; border-top: 1px solid var(--rule); margin: 0; }
+  .steps > li:last-child { border-bottom: 1px solid var(--rule); }
+  .steps > li::before { content: counter(step); font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 13px; color: var(--accent); background: var(--accent-soft); border-radius: 6px; height: 28px; width: 28px; display: grid; place-items: center; margin-top: 2px; }
+  .steps b { font-weight: 600; }
+  .steps p { margin: 4px 0 0; color: var(--ink-2); font-size: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .tablewrap { overflow-x: auto; max-width: 100%; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; background: var(--paper); }
+  tr:last-child td { border-bottom: 0; }
+  .chip { display: inline-block; font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 12px; padding: 1px 8px; border-radius: 4px; }
+  .c-m { background: var(--sh-m-bg); color: var(--sh-m); } .c-e { background: var(--sh-e-bg); color: var(--sh-e); }
+  .c-n { background: var(--sh-n-bg); color: var(--sh-n); } .c-gs { background: var(--sh-gs-bg); color: var(--sh-gs); }
+  .c-p { background: var(--sh-p-bg); color: var(--sh-p); }
+  .c-lv { background: repeating-linear-gradient(-45deg, var(--sh-lv-bg), var(--sh-lv-bg) 3px, transparent 3px, transparent 6px); color: var(--sh-lv); }
+  .rule-list { display: grid; gap: 8px; max-width: 72ch; }
+  .rule { display: grid; grid-template-columns: 8px 1fr auto; gap: 12px; align-items: start; padding: 10px 12px; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; font-size: 14px; }
+  .rule .bar { width: 8px; height: 100%; min-height: 18px; border-radius: 3px; }
+  .sev { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; font-weight: 600; white-space: nowrap; }
+  .callout { border-left: 3px solid var(--accent); background: var(--surface); padding: 12px 16px; border-radius: 0 8px 8px 0; max-width: 72ch; margin: 16px 0; }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout p:last-child { margin-bottom: 0; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; max-width: 72ch; }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; }
+  .card h4 { margin: 0 0 6px; font-size: 14px; }
+  .card p { font-size: 13.5px; color: var(--ink-2); margin: 0; }
+  .resolve { font-family: "IBM Plex Mono", monospace; font-size: 13px; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px; max-width: 72ch; overflow-x: auto; }
+  .resolve div { display: grid; grid-template-columns: 24px 1fr auto; gap: 10px; padding: 3px 0; }
+  .resolve .n { color: var(--accent); font-weight: 600; } .resolve .r { color: var(--ink-3); }
+  .lockup { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
+  .lockup svg { width: 44px; height: 44px; flex: none; }
+  .wordmark { font-size: 24px; font-weight: 700; letter-spacing: -.03em; line-height: 1; }
+  .wordmark span { color: var(--ink-2); font-weight: 600; }
+  .tagline { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; margin-top: 5px; }
+  .glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 24px; }
+  .glance div { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; }
+  .glance b { display: block; font-family: "IBM Plex Mono", monospace; font-size: 20px; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .glance small { color: var(--ink-3); font-size: 12px; }
+  .docmeta { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 12px; color: var(--ink-3); margin-top: 18px; }
+  .docmeta b { color: var(--ink-2); font-weight: 500; }
+  footer { border-top: 1px solid var(--rule); margin-top: 20px; padding-top: 20px; font-size: 12.5px; color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; }
+  footer .mini { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); font-weight: 600; }
+  footer .mini svg { width: 18px; height: 18px; }
+  .status { display: inline-block; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; font-weight: 600; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+  .s-yes { background: var(--sh-gs-bg); color: var(--ok); } .s-err { background: var(--sh-lv-bg); color: var(--err); } .s-warn { background: var(--sh-m-bg); color: var(--warn); }
+  a.ext { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+  .tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; max-width: 72ch; margin: 12px 0 4px; }
+  .tab { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; }
+  .tab .eyebrow { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  .tab h4 { margin: 4px 0 6px; font-size: 15px; } .tab p { font-size: 13.5px; color: var(--ink-2); margin: 0; }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="wrap">
+  <nav class="toc" aria-label="Contents">
+    <div class="eyebrow">Contents</div>
+    <a href="#overview">What it does</a>
+    <a href="#inputs">The four inputs</a>
+    <a href="#screens">The screens</a>
+    <a href="#setup">First-time setup</a>
+    <a href="#monthly">Monthly routine</a>
+    <a href="#leave">Recording leave</a>
+    <a href="#rotate">Auto-rotate</a>
+    <a href="#editing">Editing the grid</a>
+    <a href="#insights">Using Insights</a>
+    <a href="#checks">What it checks</a>
+    <a href="#display">Display, save &amp; backups</a>
+    <a href="#excel">Excel in and out</a>
+    <a href="#data">Your data</a>
+    <a href="#benchmark">Industry benchmark</a>
+    <a href="#confirm">Please confirm</a>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <div class="lockup">
+        <svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#101522"/><rect x="12" y="16" width="30" height="8" rx="4" fill="#F0A93B"/><rect x="17" y="28" width="30" height="8" rx="4" fill="#35C2C8"/><rect x="22" y="40" width="30" height="8" rx="4" fill="#7B8CFF"/></svg>
+        <div><div class="wordmark">Shift<span>Line</span></div><div class="tagline">Workforce Roster Planning</div></div>
+      </div>
+      <div class="kicker">User guide</div>
+      <h1>Plan a full month of shifts from a handful of rules</h1>
+      <p class="lede">ShiftLine replaces the hand-filled roster. Record each person's shift and rest days once; the month is generated, every shift is counted, gaps are flagged, rotation is balanced, and the Excel sheet you already circulate is produced on demand.</p>
+      <div class="glance">
+        <div><b>4</b><small>inputs per person</small></div>
+        <div><b>~5 min</b><small>monthly routine</small></div>
+        <div><b>6</b><small>automatic checks</small></div>
+        <div><b>0</b><small>servers or logins</small></div>
+      </div>
+      <div class="docmeta">
+        <span>Version <b>1.2</b></span>
+        <span>Prepared for <b>Line 5 roster supervision</b></span>
+        <span>Data basis <b>SLV Line 5, Aug–Sep 2026</b></span>
+      </div>
+    </header>
+
+    <section id="overview">
+      <h2>What it does</h2>
+      <p class="sub">Replacing the hand-filled grid</p>
+      <p>Today you fill roughly 660 cells by hand every month — 22 people across 30 days. Every one of those cells follows a pattern: a person's shift, their fixed pair of rest days, occasionally a mid-month shift change, and occasionally leave.</p>
+      <p>ShiftLine stores that pattern instead of the cells. You describe each person once, and the month is generated. When you open a month you have never touched, it is already complete. When someone's circumstances change, you change their rule and the grid updates immediately.</p>
+      <p>The headcount rows at the bottom of your sheet — Engineers Count and Total Head Counts — are recomputed live, and any day that falls below the minimum you set is highlighted before you send anything out.</p>
+    </section>
+
+    <section id="inputs">
+      <h2>The four inputs</h2>
+      <p class="sub">Everything the tool needs, per person</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Input</th><th>Meaning</th><th>Example from your September sheet</th></tr></thead>
+        <tbody>
+          <tr><td><b>Default shift</b></td><td>The shift they work on any ordinary day</td><td>Abdul Saeed → <span class="chip c-e">E</span></td></tr>
+          <tr><td><b>Rest days</b></td><td>Their fixed two days off each week</td><td>Fri + Sat</td></tr>
+          <tr><td><b>Rotation</b> <span style="color:var(--ink-3)">(optional)</span></td><td>A shift change part-way through the month, as day ranges</td><td>Days 1–12 <span class="chip c-n">N</span>, 13–26 <span class="chip c-e">E</span>, 27–30 <span class="chip c-m">M</span></td></tr>
+          <tr><td><b>Leave</b> <span style="color:var(--ink-3)">(optional)</span></td><td>A date range marked as leave or another status</td><td>Ummer Abbas, 20–30 Sept → <span class="chip c-lv">LV</span></td></tr>
+        </tbody>
+      </table></div>
+      <h3>How a cell is decided</h3>
+      <p>For every person and every day, the tool checks these in order and uses the first that applies:</p>
+      <div class="resolve">
+        <div><span class="n">1</span><span>You changed this cell by hand</span><span class="r">keep your edit</span></div>
+        <div><span class="n">2</span><span>The date is inside a leave block</span><span class="r">LV / FLRT</span></div>
+        <div><span class="n">3</span><span>The weekday is one of their rest days</span><span class="r">–</span></div>
+        <div><span class="n">4</span><span>A rotation range covers the day</span><span class="r">that shift</span></div>
+        <div><span class="n">5</span><span>Otherwise</span><span class="r">default shift</span></div>
+      </div>
+      <p style="margin-top:12px">Because a hand edit sits at the top of that list, regenerating a month never overwrites something you set deliberately. Hand-edited cells carry a small blue dot so you can see which ones they are.</p>
+    </section>
+
+    <section id="screens">
+      <h2>The screens</h2>
+      <p class="sub">Three tabs across the top of the window, plus a side panel</p>
+      <div class="grid2">
+        <div class="card"><h4>Planner</h4><p>The roster grid. Names down the left, days across the top, live headcounts along the bottom. This is where you spend most of your time.</p></div>
+        <div class="card"><h4>People</h4><p>One row per person. Click a row to set their shift, rest days, rotation blocks and leave. This is where the rules live.</p></div>
+        <div class="card"><h4>Setup</h4><p>Lines (Line 4, Line 5…), shift codes and their colours, minimum headcounts, display preferences, and backup / restore.</p></div>
+        <div class="card"><h4>Insights panel</h4><p>Opens on the right of the Planner. Lists every problem, shows coverage per shift per day, shift counts per person, and who has carried the most night shifts. See <a href="#insights">Using Insights</a>.</p></div>
+      </div>
+      <h3>Planner toolbar</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Control</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><b>Line</b></td><td>Switch between lines. Each line has its own people and rosters.</td></tr>
+          <tr><td><b>‹ Month Year ›</b></td><td>Step between months. Any month opens already built from the current rules.</td></tr>
+          <tr><td><b>Generate month</b></td><td>Rebuild the grid from the rules. Shows a preview first: how many cells change, and coverage afterwards.</td></tr>
+          <tr><td><b>Auto-rotate</b></td><td>Propose next month's shift allocation, balanced for night-shift fairness. See <a href="#rotate">Auto-rotate</a>.</td></tr>
+          <tr><td><b>Save</b></td><td>Everything saves automatically; this shows the status (✓ Saved / Saving…) and lets you save on demand.</td></tr>
+          <tr><td><b>− 100% +</b></td><td>Screen zoom. Scales the grid from 70% to 140%. Click the percentage to reset.</td></tr>
+          <tr><td><b>↶ ↷</b></td><td>Undo and redo. Also <kbd>Ctrl</kbd>+<kbd>Z</kbd> and <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>.</td></tr>
+          <tr><td><b>Import / Export</b></td><td>Bring in an existing roster file; write out Excel, PDF or a full backup.</td></tr>
+          <tr><td><b>Insights</b></td><td>Opens the side panel. The badge shows the number of errors, or "Clear". Hover it for a one-line explanation.</td></tr>
+          <tr><td><b>Brush row</b></td><td><b>Select</b> is the normal mode. Choosing a shift chip turns the cursor into a paintbrush for that shift.</td></tr>
+          <tr><td><b>Headcount</b> (bottom-left)</td><td>Opens and closes the headcount rows at the foot of the grid. When closed, a one-line strip still shows each shift's lowest and highest number for the month.</td></tr>
+        </tbody>
+      </table></div>
+      <h3>Reading the grid</h3>
+      <ul>
+        <li>Each cell is coloured by its shift: <span class="chip c-m">M</span> <span class="chip c-e">E</span> <span class="chip c-n">N</span> <span class="chip c-gs">GS</span> <span class="chip c-p">P</span>. Days off show as a dim dot. Leave and FLRT are hatched <span class="chip c-lv">LV</span> so they never read as a shift.</li>
+        <li>Weekend columns are tinted. Today's column is marked with a line.</li>
+        <li>A <b>red border</b> on a cell means a problem with that person on that day. A <b>red bar</b> under a day number means that day is short-staffed.</li>
+        <li>The bottom rows are your Engineers Count / Total Head Counts, recalculated on every change. A number turns red when it is below the minimum for that shift. They sit in their own space below the grid, so they never cover a person's row.</li>
+      </ul>
+    </section>
+
+    <section id="setup">
+      <h2>First-time setup</h2>
+      <p class="sub">About fifteen minutes, once</p>
+      <ol class="steps">
+        <li><div><b>Open the tool.</b><p>It loads with your Line 5 September 2026 roster already in place, read from your Excel file. Every person's shift, rest days, rotation and leave has been worked out from the grid.</p></div></li>
+        <li><div><b>Go to People and check each person.</b><p>Click a row. Confirm the default shift and the two rest days. Switch on <b>Fixed</b> for anyone who should never be moved by auto-rotate — General Shift and Project staff, for example.</p></div></li>
+        <li><div><b>Go to Setup › Shift codes and set minimum headcounts.</b><p>Enter the fewest people each shift needs on any given day. The tool is currently set to Morning 2, Evening 2, Night 3, taken from the thinnest days in your September sheet. Adjust these to your actual requirement — every coverage warning depends on them.</p></div></li>
+        <li><div><b>Add any lines you need.</b><p>Setup › Lines › Add line. Each line keeps its own people and rosters. Line 4 is already created, empty.</p></div></li>
+        <li><div><b>Back on the Planner, open Insights.</b><p>Anything the tool considers a problem in the current month is listed there. Your September sheet has one: Night falls to 2 people on the 25th and 26th.</p></div></li>
+      </ol>
+    </section>
+
+    <section id="monthly">
+      <h2>Monthly routine</h2>
+      <p class="sub">A few minutes instead of an afternoon</p>
+      <ol class="steps">
+        <li><div><b>Step forward to the new month.</b><p>Use the › arrow. The month is already generated from everyone's rules. Nothing to fill in.</p></div></li>
+        <li><div><b>Run Auto-rotate if shifts should change this month.</b><p>Review who moves and why, then Apply. Skip this if everyone stays where they are.</p></div></li>
+        <li><div><b>Check the Insights badge.</b><p>If it shows a number, open the panel. Each item says exactly what is wrong. For a short-staffed day, press <b>Show who can cover</b> — it lists people who are off that day, not on leave, and safe to bring in. Click a name to assign them.</p></div></li>
+        <li><div><b>Make any hand adjustments directly on the grid.</b><p>Swap two people, extend a shift, mark a one-off day. See <a href="#editing">Editing the grid</a>.</p></div></li>
+        <li><div><b>Export › Excel workbook.</b><p>You get the same layout as your current file — title, legend, coloured codes, headcount formulas — ready to send to management.</p></div></li>
+      </ol>
+    </section>
+
+    <section id="leave">
+      <h2>Recording leave</h2>
+      <p class="sub">Vacation, training, FLRT, or any status you define</p>
+      <ol class="steps">
+        <li><div><b>People › click the person.</b></div></li>
+        <li><div><b>Under Leave &amp; status, press Add leave.</b><p>A new row appears with a date range and a status code.</p></div></li>
+        <li><div><b>Set the dates and the code.</b><p><span class="chip c-lv">LV</span> for leave, <span class="chip c-lv">FLRT</span> for that status, or any status code you add in Setup. Changes save as you type.</p></div></li>
+        <li><div><b>Return to the Planner.</b><p>The person's cells for those dates are now hatched. If that leaves a shift short on any day, Insights flags it immediately and offers cover.</p></div></li>
+      </ol>
+      <div class="callout"><p>Leave is stored as a rule, not as cells. It survives regenerating the month, and it stays on the person's record for reference in future months.</p></div>
+    </section>
+
+    <section id="rotate">
+      <h2>Auto-rotate</h2>
+      <p class="sub">Fair shift rotation, decided the same way every time</p>
+      <p>Rotating people between Morning, Evening and Night by hand is where unfairness creeps in. In your September sheet four engineers worked 22 night shifts each while six worked none. Auto-rotate fixes this in one step.</p>
+      <h3>What it does</h3>
+      <ol class="steps">
+        <li><div><b>Counts each person's night-shift load</b> across the months already in the tool.</div></li>
+        <li><div><b>Moves people one step around the cycle</b> — Morning → Evening → Night → Morning — heaviest night load first, so nobody stays on nights month after month.<p>The slider controls how many people move: all the way left moves only who is needed for coverage; all the way right rotates everyone.</p></div></li>
+        <li><div><b>Repairs coverage.</b><p>If any shift on any day would fall below its minimum, it moves the best-fitting person across from a shift that has spare people.</p></div></li>
+        <li><div><b>Shows you the result before writing anything.</b><p>Who moves, from which shift to which, how many nights they have worked so far, the thinnest day per shift after the change, and a plain-language reason for each move.</p></div></li>
+        <li><div><b>Apply</b> writes it into next month and takes you there.</div></li>
+      </ol>
+      <ul>
+        <li>People marked <b>Fixed</b>, and anyone on a non-rotating code such as GS or P, are never moved.</li>
+        <li>The result is deterministic: the same inputs always produce the same roster, so a roster you have signed off will not change under you.</li>
+        <li>The Fairness tab in Insights shows nights per person and how wide the gap is, so you can see the effect over time.</li>
+      </ul>
+    </section>
+
+    <section id="editing">
+      <h2>Editing the grid</h2>
+      <p class="sub">Three ways to change a cell</p>
+      <div class="grid2">
+        <div class="card"><h4>Click</h4><p>In Select mode, click any cell. A small menu opens with every shift code and Off. Click one.</p></div>
+        <div class="card"><h4>Paint</h4><p>Click a shift chip in the Brush row. Now click a cell, or click-and-drag across a run of cells, to paint that shift. Press <kbd>Esc</kbd> to put the brush down.</p></div>
+        <div class="card"><h4>Type</h4><p>Click a cell to focus it, then type <kbd>M</kbd> <kbd>E</kbd> <kbd>N</kbd> <kbd>G</kbd> <kbd>P</kbd> or <kbd>-</kbd>. Arrow keys move between cells.</p></div>
+      </div>
+      <p style="margin-top:14px">Every edit is undoable with <kbd>Ctrl</kbd>+<kbd>Z</kbd>. Hand-edited cells show a blue dot in the corner, and they are preserved when you regenerate the month unless you untick <b>Keep my hand edits</b> in the Generate dialog.</p>
+    </section>
+
+    <section id="insights">
+      <h2>Using Insights</h2>
+      <p class="sub">The panel on the right of the Planner — the tool checking your roster for you</p>
+      <p>You never have to run Insights. Every time anything on the grid changes — a cell painted, leave added, a month generated — the whole month is re-checked in the background and the result appears in the panel straight away.</p>
+      <h3>The badge tells you the state at a glance</h3>
+      <p>Look at the <b>Insights</b> button in the toolbar:</p>
+      <ul>
+        <li><span class="status s-err">Red number</span> — that many errors. Something is wrong and needs fixing before the roster goes out.</li>
+        <li><span class="status s-warn">Amber number</span> — that many warnings. Worth a look, but may be perfectly fine.</li>
+        <li><span class="status s-yes">Clear</span> — nothing to fix.</li>
+      </ul>
+      <p>Hover the button for a one-line explanation. Click it to open the panel, which has three tabs.</p>
+      <div class="tabs">
+        <div class="tab"><div class="eyebrow">Tab 1</div><h4>Issues</h4><p>Every problem in the month, one line each, most serious first. This is where you fix things.</p></div>
+        <div class="tab"><div class="eyebrow">Tab 2</div><h4>Coverage</h4><p>A chart per shift showing people on it each day, plus the shift count for every person. This is where you see the shape of the month.</p></div>
+        <div class="tab"><div class="eyebrow">Tab 3</div><h4>Fairness</h4><p>Night shifts worked per person. This is where you see who has carried the load, and why Auto-rotate moves who it moves.</p></div>
+      </div>
+      <h3>Tab 1 — Issues: finding and fixing a problem</h3>
+      <p>Each line says the day, the shift and what is wrong — for example <em>"Day 25: Night has 2, needs 3."</em> Red items are under <b>Must fix</b>; amber items are under <b>Worth a look</b>.</p>
+      <ol class="steps">
+        <li><div><b>Click the issue.</b><p>The grid scrolls to that day and lights the column up for a moment, so you see the problem in context. If the issue is about one person, their cell is selected as well.</p></div></li>
+        <li><div><b>For a short-staffed day, click "Show who can cover →".</b><p>A short list of names appears. These are people who are <b>off that day</b>, <b>not on leave</b>, and who <b>would not end up with a night shift followed by a morning shift</b>. The person with the lightest month so far is listed first, so the extra work goes to whoever has done the least.</p></div></li>
+        <li><div><b>Click "Assign" next to a name.</b><p>That person is put on the shift for that day immediately. The grid updates, the headcount row updates, and if the gap is now closed the issue disappears from the list.</p></div></li>
+        <li><div><b>If it says nobody is free,</b><p>the day cannot be covered from the current team. You would need to shorten a leave block, borrow someone from another line, or accept the shortfall for that day.</p></div></li>
+      </ol>
+      <p>Anyone you assign this way is a normal hand edit: the cell gets a blue dot, <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes it, and it survives regenerating the month.</p>
+      <h3>Tab 2 — Coverage: the shape of the month, and counts per person</h3>
+      <p>One small bar chart for each shift. Each bar is one day; the taller the bar, the more people on that shift that day. A <b>red bar</b> is a day below that shift's minimum — exactly the same days that appear as errors in the Issues tab. Above the charts, four tiles give the month's totals: shift-days worked, rest days, leave days, and days in the month.</p>
+      <p>Below the charts, <b>Employee Breakdown</b> lists every person with their number of Morning, Evening, Night and other shifts, leave days and days off for the month. Type in the filter box to find someone; click a card to jump to their row on the grid.</p>
+      <h3>Tab 3 — Fairness: who has carried the nights</h3>
+      <p>Every person who rotates is listed with the number of night shifts they have worked, added up across all the months stored in the tool. The bar next to each name shows their share. The <b>spread</b> number at the top is the gap between the person with the most nights and the person with the fewest — the smaller it is, the fairer the roster.</p>
+      <p>This is the information Auto-rotate reads. When it proposes moving someone off nights, it is because they are near the top of this list. So if you ever wonder <em>why</em> a rotation moved a particular person, this tab is the answer.</p>
+      <div class="callout"><p>In your September roster the spread is 22: four engineers worked 22 night shifts each while six worked none. Running Auto-rotate into October narrows that gap.</p></div>
+      <h3>Where the rules come from</h3>
+      <p>Every check in Insights depends on numbers you control. The <b>minimum people per day</b> for each shift (Setup › Shift codes) decides what counts as short-staffed. The <b>days in a row</b> limit (Setup › Planner rules) decides when a long run is flagged. Change a number there and every check re-runs instantly. Set a minimum to 0 to switch that check off for that shift.</p>
+    </section>
+
+    <section id="checks">
+      <h2>What it checks</h2>
+      <p class="sub">The six rules behind the Issues tab</p>
+      <div class="rule-list">
+        <div class="rule"><span class="bar" style="background:var(--err)"></span><span>A shift is below its minimum headcount on a day</span><span class="sev" style="color:var(--err)">Error</span></div>
+        <div class="rule"><span class="bar" style="background:var(--err)"></span><span>A shift has nobody on it at all on a day</span><span class="sev" style="color:var(--err)">Error</span></div>
+        <div class="rule"><span class="bar" style="background:var(--err)"></span><span>Night shift followed by Morning shift the next day — no rest gap between 07:00 and 06:00</span><span class="sev" style="color:var(--err)">Error</span></div>
+        <div class="rule"><span class="bar" style="background:var(--err)"></span><span>Someone is rostered on a day inside their own leave block</span><span class="sev" style="color:var(--err)">Error</span></div>
+        <div class="rule"><span class="bar" style="background:var(--warn)"></span><span>Someone is working on one of their declared rest days</span><span class="sev" style="color:var(--warn)">Warning</span></div>
+        <div class="rule"><span class="bar" style="background:var(--warn)"></span><span>Someone works more than 6 days in a row (threshold adjustable in Setup)</span><span class="sev" style="color:var(--warn)">Warning</span></div>
+      </div>
+      <p style="margin-top:14px">Errors mean the roster is wrong. Warnings are worth a look but can be legitimate — for instance, someone covering on a rest day by agreement.</p>
+    </section>
+
+    <section id="display">
+      <h2>Display, save &amp; backups</h2>
+      <p class="sub">Answers to the questions raised in review</p>
+      <h3>Zoom in and out</h3>
+      <p>Use the <b>− 100% +</b> control in the Planner toolbar. Each press changes the grid by 10%, from 70% up to 140%. Cells, rows, the name column and the text inside all scale together. Click the percentage to return to 100%. On a small screen the same control is inside the <b>⋯</b> menu, and it is also in <b>Setup › Display &amp; Fonts</b>.</p>
+      <h3>Font size and style</h3>
+      <p><b>Setup › Display &amp; Fonts</b> has two settings. <b>Font size</b> — Compact, Normal or Large — changes text throughout the application. <b>Font family</b> — Inter (default), System or Monospace — changes the typeface. On a wide screen the font-size choice is also a dropdown in the toolbar. Both are remembered on this device.</p>
+      <h3>How to save</h3>
+      <p>Every change you make is saved automatically the moment you make it — painting a cell, adding leave, running Generate. There is nothing to lose by closing the browser. The <b>Save</b> button in the toolbar, with its <b>✓ Saved</b> / <b>Saving…</b> status, is there so you can see that this is happening and press it if you want to be sure.</p>
+      <p>Saving keeps the roster inside this browser. To get a file you can send or keep elsewhere, use <b>Export › Excel workbook</b> or <b>Setup › Download backup</b>.</p>
+      <h3>Backups and restore</h3>
+      <ol class="steps">
+        <li><div><b>Setup › Data &amp; Backups › Download backup (JSON).</b><p>Saves one file containing everything — all lines, people, rules, leave and every saved month. Keep it somewhere safe. Do this at the end of each month.</p></div></li>
+        <li><div><b>To restore, press Restore from backup and choose that file.</b><p>The tool checks the file is a valid ShiftLine backup, replaces what is in the browser with it, and reloads. Use this to move to another computer or to recover after clearing browser data.</p></div></li>
+      </ol>
+      <div class="callout"><p>Restore needs a backup file to exist first. If you have never pressed Download backup, there is nothing to restore yet.</p></div>
+      <h3>What "Reset to Demo Data" means</h3>
+      <p>This wipes everything in the browser and reloads the sample September 2026 roster that the tool was delivered with. It is for returning to a clean starting point after testing. It cannot be undone, so download a backup first if there is anything you want to keep.</p>
+    </section>
+
+    <section id="excel">
+      <h2>Excel in and out</h2>
+      <p class="sub">Works with the layout you already use</p>
+      <h3>Import an existing file</h3>
+      <ol class="steps">
+        <li><div><b>Planner › Import.</b> Drop your <code>.xlsx</code> file or choose it.</div></li>
+        <li><div><b>Pick the sheet</b> if the workbook has more than one — for example the August or September tab.</div></li>
+        <li><div><b>Review what was understood.</b><p>The tool reads the day columns and works backwards: where <code>-</code> falls reveals each person's rest days, where the code changes reveals rotation blocks, and red-filled empty cells become leave. You see a table of every person's shift, rest days and rotation before anything is saved.</p></div></li>
+        <li><div><b>Choose the line and press Import.</b><p>By default it replaces the people on that line with the ones in the file. Untick <b>Replace</b> to add instead.</p></div></li>
+      </ol>
+      <h3>Export</h3>
+      <div class="grid2">
+        <div class="card"><h4>Excel workbook</h4><p>Your layout: title row, shift-timing legend, weekday and date headers, colour-filled codes, weekday repeat row, and the headcount rows as live <code>COUNTIF</code> formulas that keep recalculating in Excel. Landscape, fit to one page. About one-eighth the size of your current file.</p></div>
+        <div class="card"><h4>Print / PDF</h4><p>Opens the browser print dialog on the grid. Choose landscape and "Save as PDF" for a wall sheet.</p></div>
+        <div class="card"><h4>Full backup</h4><p>Everything — lines, people, rules, leave and saved months — as one file. Restore from Setup › Data &amp; Backups.</p></div>
+      </div>
+    </section>
+
+    <section id="data">
+      <h2>Your data</h2>
+      <p class="sub">Where it lives and how to keep it safe</p>
+      <p>All data is stored inside your browser on your own computer. Nothing is sent to any server and there is no login. This means:</p>
+      <ul>
+        <li>It works without an internet connection once the page is open.</li>
+        <li>It is tied to that browser on that machine. To move to another computer, use <b>Setup › Download backup</b> and then <b>Restore from backup</b> on the new one.</li>
+        <li>Clearing the browser's site data will remove it. Take a backup before doing that.</li>
+      </ul>
+      <div class="callout warn"><p>Take a backup at the end of each month. It takes one click and it is the only copy.</p></div>
+    </section>
+
+    <section id="benchmark">
+      <h2>Industry benchmark</h2>
+      <p class="sub">The standard ShiftLine is built to</p>
+      <p>ShiftLine follows the established e-roster model — data-driven shift assignment, AI-assisted scheduling, real-time leave tracking and compliance checks — as set out by commercial systems such as the <a class="ext" href="https://pinshiftapp.com/en/e-roster-system" target="_blank" rel="noopener">PinShift eRoster System</a>. The difference is focus: ShiftLine is tailored to a fixed three-shift, 5-on / 2-off operation and produces the Excel format your management already uses.</p>
+    </section>
+
+    <section id="confirm">
+      <h2>Please confirm</h2>
+      <p class="sub">Details from your sheet we could not be certain about</p>
+      <p>The tool works either way, but these affect how numbers are counted and labelled.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Item</th><th>What we found</th><th>What we assumed</th></tr></thead>
+        <tbody>
+          <tr><td><b>MT, ML, ET, EL, NT, NL</b></td><td>Referenced in your Total Head Counts formulas but not in the legend</td><td>Support categories that count toward total headcount but not Engineers Count. Added as MT / ET / NT with those settings.</td></tr>
+          <tr><td><b>FLRT</b></td><td>Imran Ghani is marked FLRT for the whole of September</td><td>A non-working status, like leave.</td></tr>
+          <tr><td><b>Red blocks</b></td><td>Ummer Abbas 20–30, Rehan Raziq 1–3, Raneem Almalki 6–10 and 13–17</td><td>Leave. Not counted toward any shift.</td></tr>
+          <tr><td><b>Minimum headcount</b></td><td>No stated minimum in the sheet</td><td>Morning 2, Evening 2, Night 3, from your thinnest days. Editable in Setup.</td></tr>
+          <tr><td><b>"Line 4"</b></td><td>Both tabs in the file are Line 5</td><td>Line 4 created empty, ready for its own file.</td></tr>
+          <tr><td><b>Night on 25–26 Sept</b></td><td>Only 2 people on Night; every other Fri/Sat pair has 3</td><td>A genuine gap — flagged in Insights rather than hidden.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <footer>
+      <span class="mini"><svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#101522"/><rect x="12" y="16" width="30" height="8" rx="4" fill="#F0A93B"/><rect x="17" y="28" width="30" height="8" rx="4" fill="#35C2C8"/><rect x="22" y="40" width="30" height="8" rx="4" fill="#7B8CFF"/></svg> ShiftLine</span>
+      <span>Workforce Roster Planning · User Guide v1.2</span>
+      <span>Everything in this guide reflects the tool as delivered; items under "Please confirm" will be updated once agreed.</span>
+    </footer>
+  </main>
+</div>

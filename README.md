@@ -21,6 +21,13 @@ npm test           # 67 tests, incl. cell-for-cell reproduction of the real Sept
 npm run build      # static bundle in dist/ — host anywhere, or open via any static server
 ```
 
+## Server (optional)
+
+`server/` is a Node + Express + MongoDB API with a Groq assistant. The web app
+works fully without it. With it, set `VITE_API_URL` at build time and the app
+gains **Setup › Cloud** (sign in, push / pull the dataset) and an **✦ Ask** tab
+in Insights. See [server/README.md](server/README.md).
+
 ## Layout
 
 ```
@@ -28,7 +35,9 @@ src/domain/    pure scheduling engine — generator, rotation, validation, summa
 src/data/      Dexie schema + the seeded September 2026 Line 5 roster
 src/io/        Excel import (reverse-engineers rules from a grid) and branded export
 src/features/  planner grid, people, setup, insights, import/export dialogs
-src/app/       store (state + persistence), shift-colour tokens
+src/app/       store (state + persistence), shift-colour tokens, API client
+server/        Express + Mongoose API, Groq assistant, audit log
+docs/          client user guide (source of the published artifact)
 ```
 
 ## How a month is built
