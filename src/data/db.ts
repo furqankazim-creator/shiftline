@@ -13,6 +13,9 @@ export interface Settings {
   weekendDays: number[];
   maxConsecutive: number;
   seeded: boolean;
+  zoomLevel: number;
+  fontSize: 'compact' | 'normal' | 'large';
+  fontFamily: 'default' | 'mono' | 'system' | 'sans';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -24,6 +27,9 @@ export const DEFAULT_SETTINGS: Settings = {
   weekendDays: [5, 6],
   maxConsecutive: 6,
   seeded: false,
+  zoomLevel: 100,
+  fontSize: 'normal',
+  fontFamily: 'default',
 };
 
 class RosterDB extends Dexie {

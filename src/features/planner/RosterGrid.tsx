@@ -43,7 +43,11 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
     roster, employees, codes, columns, days, issues, settings, paintCell, paintRange,
   } = useStore();
   const viewport = useViewport();
-  const { name: NAME_COL, cell: CELL_W, row: CELL_H } = METRICS[viewport];
+  const zoom = (settings.zoomLevel ?? 100) / 100;
+  const base = METRICS[viewport];
+  const NAME_COL = Math.round(base.name * zoom);
+  const CELL_W = Math.round(base.cell * zoom);
+  const CELL_H = Math.round(base.row * zoom);
   const showContact = viewport === 'desktop';
 
   const [focus, setFocus] = useState<Focus | null>(null);
@@ -278,9 +282,17 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
                     className="h-4 w-[3px] rounded-full shrink-0"
                     style={{ background: toneVars(codeById.get(employee.defaultShift)?.tone ?? 'off').accent }}
                   />
-                  <span className={cx('truncate font-medium', viewport === 'mobile' ? 'text-[11.5px]' : 'text-[12.5px]')}>{employee.name}</span>
+                  <span
+                    className={cx('truncate font-medium', viewport === 'mobile' ? 'text-[11.5px]' : 'text-[12.5px]')}
+                    style={{ fontSize: `${Math.max(10, Math.round(12.5 * zoom))}px` }}
+                  >
+                    {employee.name}
+                  </span>
                   {showContact && (
-                    <span className="ml-auto font-mono text-[10.5px] text-ink-3 shrink-0">
+                    <span
+                      className="ml-auto font-mono text-[10.5px] text-ink-3 shrink-0"
+                      style={{ fontSize: `${Math.max(8.5, Math.round(10.5 * zoom))}px` }}
+                    >
                       {employee.contact}
                     </span>
                   )}
@@ -314,7 +326,7 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
                       onMouseEnter={() => onCellEnter(employee.id, col.index)}
                       className={cx(
                         'relative flex items-center justify-center border-r border-[var(--line)]',
-                        'font-mono text-[11.5px] font-bold tracking-tight transition-[filter,background] duration-100',
+                        'font-mono font-bold tracking-tight transition-[filter,background] duration-100',
                         'hover:brightness-125 cursor-pointer',
                         def?.isStatus && 'hatch',
                         col.isWeekend && isOff && 'bg-[var(--weekend-tint)]',
@@ -323,6 +335,7 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
                         width: CELL_W,
                         minWidth: CELL_W,
                         height: CELL_H,
+                        fontSize: `${Math.max(9, Math.round(11.5 * zoom))}px`,
                         background: def?.isStatus ? undefined : tone.bg,
                         color: tone.fg,
                       }}
@@ -373,11 +386,8 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
       </div>
 
       {/* The headcount rail sits *below* the scroll area rather than sticky
-          inside it, so it can never slide over an employee row. It keeps its
-          columns lined up by mirroring the grid's horizontal scroll. */}
+          inside it, moved downward with spacing so it never crowds rows. */}
       <SummaryRail
-        // Only tally shifts that matter here: ones with a minimum to police, or
-        // ones actually in use this month.
         codes={codes.filter(
           (c) =>
             !c.isStatus &&
@@ -391,6 +401,7 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
         revealKey={revealKey}
         scrollLeft={scrollLeft}
         issues={issues}
+        zoom={zoom}
       />
 
       {picker && (
@@ -414,9 +425,6 @@ const RAIL_KEY = 'shiftline.rail-open';
 /**
  * The headcount rows at the foot of the grid.
  *
- * These are the client's own rows 27–32, except they recompute live instead of
- * being re-tallied by hand, and a cell below its minimum paints itself red.
- *
  * Collapsible: the bottom-left button opens and closes it like a shutter. When
  * closed, a one-line strip keeps the per-shift range and the error count in
  * view so the grid can take the full height without losing the signal.
@@ -431,6 +439,7 @@ function SummaryRail({
   revealKey,
   scrollLeft,
   issues,
+  zoom = 1,
 }: {
   codes: ShiftCode[];
   days: ReturnType<typeof import('@/domain/summary').summarise>;
@@ -441,6 +450,7 @@ function SummaryRail({
   revealKey: number;
   scrollLeft: number;
   issues: Issue[];
+  zoom?: number;
 }) {
   const [open, setOpen] = useState<boolean>(() => {
     try {
@@ -462,9 +472,11 @@ function SummaryRail({
   };
 
   const shortDays = issues.filter((i) => !i.employeeId && i.severity === 'error').length;
+  const rowHeight = Math.max(22, Math.round(26 * zoom));
+  const fontSz = Math.max(9, Math.round(11 * zoom));
 
   return (
-    <div className="shrink-0 border-t-2 border-[var(--line-strong)] bg-[var(--surface)]">
+    <div className="shrink-0 mt-3 border-t-2 border-[var(--line-strong)] bg-[var(--surface)] shadow-sm">
       {/* ---------------------------------------------------- toggle strip */}
       <div className="flex items-center h-8 border-b border-[var(--line)]">
         <button
@@ -472,19 +484,22 @@ function SummaryRail({
           aria-expanded={open}
           className="flex h-full items-center gap-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-ink-2 hover:text-ink hover:bg-[var(--surface-2)] transition-colors border-r border-[var(--line-strong)]"
           style={{ width: nameWidth, minWidth: nameWidth }}
-          title={open ? 'Hide headcount rows' : 'Show headcount rows'}
+          title={open ? 'Collapse headcount rows' : 'Expand headcount rows'}
         >
           <span className="grid h-5 w-5 place-items-center rounded-md bg-[var(--surface-3)] text-ink-2">
             <BarsIcon />
           </span>
           Headcount
           <motion.span
-            animate={{ rotate: open ? 0 : 180 }}
+            animate={{ rotate: open ? 180 : 0 }}
             transition={{ type: 'spring', stiffness: 400, damping: 30 }}
             className="text-ink-3"
           >
-            <ChevronIcon />
+            <ChevronDownIcon />
           </motion.span>
+          <span className="text-[10px] lowercase text-ink-3 font-normal">
+            ({open ? 'collapse' : 'expand'})
+          </span>
           {shortDays > 0 && (
             <span className="ml-auto rounded-full bg-[var(--sh-leave-bg)] px-1.5 font-mono text-[10px] normal-case tracking-normal text-[var(--danger)]">
               {shortDays}
@@ -537,10 +552,10 @@ function SummaryRail({
                     <div key={code.id} className="flex border-b border-[var(--line)] last:border-b-0">
                       <div
                         className="sticky left-0 z-10 flex items-center gap-2 px-3 bg-[var(--surface)] border-r border-[var(--line-strong)]"
-                        style={{ width: nameWidth, minWidth: nameWidth, height: 26, transform: `translateX(${scrollLeft}px)` }}
+                        style={{ width: nameWidth, minWidth: nameWidth, height: rowHeight, transform: `translateX(${scrollLeft}px)` }}
                       >
                         <span className="h-1.5 w-1.5 rounded-full" style={{ background: tone.accent }} />
-                        <span className="text-[11px] font-medium text-ink-2">{code.label}</span>
+                        <span className="text-[11px] font-medium text-ink-2 truncate" style={{ fontSize: `${fontSz}px` }}>{code.label}</span>
                         {code.minHeadcount > 0 && (
                           <span className="ml-auto font-mono text-[10px] text-ink-3">min {code.minHeadcount}</span>
                         )}
@@ -552,13 +567,14 @@ function SummaryRail({
                           <div
                             key={`${revealKey}-${col.day}`}
                             className={cx(
-                              'flex items-center justify-center border-r border-[var(--line)] font-mono text-[11px]',
+                              'flex items-center justify-center border-r border-[var(--line)] font-mono',
                               col.isWeekend && 'bg-[var(--weekend-tint)]',
                             )}
                             style={{
                               width: cellWidth,
                               minWidth: cellWidth,
-                              height: 26,
+                              height: rowHeight,
+                              fontSize: `${fontSz}px`,
                               background: short ? 'var(--sh-leave-bg)' : undefined,
                               color: short ? 'var(--danger)' : n === 0 ? 'var(--ink-3)' : 'var(--ink-2)',
                               fontWeight: short ? 700 : 500,
@@ -591,10 +607,10 @@ function BarsIcon() {
   );
 }
 
-function ChevronIcon() {
+function ChevronDownIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="m6 15 6-6 6 6" />
+      <path d="m6 9 6 6 6-6" />
     </svg>
   );
 }

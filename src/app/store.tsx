@@ -30,6 +30,8 @@ interface RosterStore {
   fairnessRows: ReturnType<typeof fairness>;
   canUndo: boolean;
   canRedo: boolean;
+  saveStatus: 'saved' | 'saving';
+  saveRoster: () => Promise<void>;
 
   setMonth(year: number, month: number): void;
   stepMonth(delta: number): void;
@@ -76,7 +78,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     ensureSeeded().then(() => setReady(true));
   }, []);
 
-  const settings = useLiveQuery(() => db.settings.get('app'), [], undefined) ?? DEFAULT_SETTINGS;
+  const rawSettings = useLiveQuery(() => db.settings.get('app'), [], undefined);
+  const settings: Settings = useMemo(
+    () => ({ ...DEFAULT_SETTINGS, ...rawSettings }),
+    [rawSettings],
+  );
   const lines = useLiveQuery(() => db.lines.orderBy('order').toArray(), [], []) ?? [];
   const codes = useLiveQuery(() => db.codes.orderBy('order').toArray(), [], []) ?? [];
   const leave = useLiveQuery(() => db.leave.toArray(), [], []) ?? [];
@@ -99,6 +105,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // ---- the active month's grid ------------------------------------------
   const [roster, setRoster] = useState<RosterMonth | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved');
   const undoStack = useRef<RosterMonth[]>([]);
   const redoStack = useRef<RosterMonth[]>([]);
   const [, forceRender] = useState(0);
@@ -141,8 +148,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [ready, id, activeLineId, activeYear, activeMonth, employees, lineLeave]);
 
   const persist = useCallback(async (next: RosterMonth) => {
-    await db.rosters.put(next);
+    setSaveStatus('saving');
+    try {
+      await db.rosters.put(next);
+      setSaveStatus('saved');
+    } catch {
+      setSaveStatus('saved');
+    }
   }, []);
+
+  const saveRoster = useCallback(async () => {
+    if (!roster) return;
+    setSaveStatus('saving');
+    await db.rosters.put(roster);
+    setSaveStatus('saved');
+  }, [roster]);
 
   const commit = useCallback(
     (next: RosterMonth) => {
@@ -390,6 +410,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     fairnessRows,
     canUndo: undoStack.current.length > 0,
     canRedo: redoStack.current.length > 0,
+    saveStatus,
+    saveRoster,
 
     setMonth,
     stepMonth,

@@ -6,7 +6,7 @@ import { useViewport } from '@/app/useViewport';
 import { toneVars } from '@/app/tones';
 import { Button, Segmented, cx } from '@/components/ui';
 import { monthTotals } from '@/domain/summary';
-import type { Issue } from '@/domain/types';
+import { OFF, type Issue } from '@/domain/types';
 import { suggestCover } from '@/domain/validate';
 
 type Tab = 'issues' | 'coverage' | 'fairness';
@@ -30,12 +30,21 @@ export function InsightsDrawer({
   const panel = (
     <div className={overlay ? 'w-full h-full flex flex-col' : 'w-[336px] h-full flex flex-col'}>
             <header className="flex items-center gap-2 px-4 h-14 border-b border-[var(--line)]">
-              <h2 className="text-[13px] font-semibold">Insights</h2>
-              {errors > 0 && (
-                <span className="rounded-full bg-[var(--sh-leave-bg)] px-1.5 py-0.5 font-mono text-[10.5px] text-[var(--danger)]">
-                  {errors}
-                </span>
-              )}
+              <div className="flex flex-col">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-[13px] font-semibold">Insights</h2>
+                  {errors > 0 ? (
+                    <span className="rounded-full bg-[var(--sh-leave-bg)] px-1.5 py-0.5 font-mono text-[10.5px] text-[var(--danger)]">
+                      {errors} error{errors > 1 ? 's' : ''}
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-[var(--sh-gs-bg)] px-1.5 py-0.5 font-mono text-[10.5px] text-[var(--ok)]">
+                      All rules met
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] text-ink-3">Staffing checks, coverage & fairness overview</span>
+              </div>
               <Button size="sm" onClick={onClose} className="ml-auto px-2">✕</Button>
             </header>
 
@@ -53,7 +62,7 @@ export function InsightsDrawer({
 
             <div className="flex-1 overflow-y-auto">
               {tab === 'issues' && <IssuesTab onJump={onJump} />}
-              {tab === 'coverage' && <CoverageTab />}
+              {tab === 'coverage' && <CoverageTab onJump={onJump} />}
               {tab === 'fairness' && <FairnessTab />}
             </div>
     </div>
@@ -218,10 +227,70 @@ function IssuesTab({ onJump }: { onJump: (e: string | undefined, d: number | und
 
 /* ---------------------------------------------------------------- Coverage */
 
-function CoverageTab() {
-  const { days, codes, columns } = useStore();
+function CoverageTab({ onJump }: { onJump?: (e: string | undefined, d: number | undefined) => void }) {
+  const { days, codes, columns, roster, employees } = useStore();
   const totals = useMemo(() => monthTotals(days), [days]);
-  const worked = codes.filter((c) => !c.isStatus);
+  // Chart only shifts that matter this month: in use, or with a minimum to police.
+  const worked = codes.filter(
+    (c) => !c.isStatus && (c.minHeadcount > 0 || days.some((d) => (d.total[c.id] ?? 0) > 0)),
+  );
+  const [search, setSearch] = useState('');
+
+  const employeeStats = useMemo(() => {
+    if (!roster) return [];
+    const codeById = new Map(codes.map((c) => [c.id, c]));
+
+    return employees.map((emp) => {
+      const cells = roster.cells[emp.id] ?? [];
+      let morning = 0;
+      let evening = 0;
+      let night = 0;
+      let other = 0;
+      let off = 0;
+      let leaveCount = 0;
+      let totalWorked = 0;
+
+      for (let i = 0; i < columns.length; i++) {
+        const cell = cells[i];
+        const codeId = cell?.code ?? OFF;
+        if (codeId === OFF) {
+          off++;
+          continue;
+        }
+        const def = codeById.get(codeId);
+        if (def?.isStatus) {
+          leaveCount++;
+        } else {
+          totalWorked++;
+          if (def?.tone === 'morning') morning++;
+          else if (def?.tone === 'evening') evening++;
+          else if (def?.tone === 'night') night++;
+          else other++;
+        }
+      }
+
+      return {
+        employee: emp,
+        morning,
+        evening,
+        night,
+        other,
+        off,
+        leave: leaveCount,
+        totalWorked,
+      };
+    });
+  }, [employees, roster, codes, columns.length]);
+
+  const filteredStats = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return employeeStats;
+    return employeeStats.filter(
+      (s) =>
+        s.employee.name.toLowerCase().includes(q) ||
+        s.employee.contact.toLowerCase().includes(q),
+    );
+  }, [employeeStats, search]);
 
   return (
     <div className="p-4 flex flex-col gap-4">
@@ -271,6 +340,77 @@ function CoverageTab() {
           </div>
         );
       })}
+
+      {/* ----------------- Employee Breakdown (Client requested Nos. per employee) */}
+      <div className="mt-2 pt-3 border-t border-[var(--line)] flex flex-col gap-2.5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-[12.5px] font-semibold text-ink">Employee Breakdown</h3>
+            <p className="text-[10.5px] text-ink-3">Total shift counts (Nos.) per person this month</p>
+          </div>
+          <span className="text-[10.5px] font-mono text-ink-3 bg-[var(--surface-2)] px-1.5 py-0.5 rounded">
+            {filteredStats.length} people
+          </span>
+        </div>
+
+        <input
+          type="text"
+          placeholder="Filter employee name…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-7 px-2.5 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] text-[11.5px] text-ink placeholder:text-ink-3 focus:outline-none focus:border-[var(--accent)]"
+        />
+
+        <div className="flex flex-col gap-1.5 max-h-[360px] overflow-y-auto pr-0.5">
+          {filteredStats.map(({ employee, morning, evening, night, other, off, leave, totalWorked }) => (
+            <div
+              key={employee.id}
+              onClick={() => onJump?.(employee.id, 0)}
+              className="group flex flex-col gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] p-2 hover:border-[var(--accent)] hover:bg-[var(--surface-3)] transition-colors cursor-pointer"
+              title={`Click to jump to ${employee.name}'s row`}
+            >
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[12px] font-medium text-ink truncate group-hover:text-[var(--accent)] transition-colors">
+                  {employee.name}
+                </span>
+                <span className="font-mono text-[10.5px] font-bold text-ink-2 bg-[var(--surface)] px-1.5 py-0.5 rounded shrink-0">
+                  {totalWorked} worked
+                </span>
+              </div>
+
+              <div className="grid grid-cols-6 gap-1 text-center font-mono text-[10px]">
+                <div className="rounded bg-[var(--sh-m-bg)] py-0.5 text-[var(--sh-m-ink)]" title="Morning shifts">
+                  <div className="text-[9px] uppercase font-sans text-ink-3">M</div>
+                  <div className="font-bold">{morning}</div>
+                </div>
+                <div className="rounded bg-[var(--sh-e-bg)] py-0.5 text-[var(--sh-e-ink)]" title="Evening shifts">
+                  <div className="text-[9px] uppercase font-sans text-ink-3">E</div>
+                  <div className="font-bold">{evening}</div>
+                </div>
+                <div className="rounded bg-[var(--sh-n-bg)] py-0.5 text-[var(--sh-n-ink)]" title="Night shifts">
+                  <div className="text-[9px] uppercase font-sans text-ink-3">N</div>
+                  <div className="font-bold">{night}</div>
+                </div>
+                <div className="rounded bg-[var(--sh-gs-bg)] py-0.5 text-[var(--sh-gs-ink)]" title="General / Other worked shifts">
+                  <div className="text-[9px] uppercase font-sans text-ink-3">Oth</div>
+                  <div className="font-bold">{other}</div>
+                </div>
+                <div className="rounded bg-[var(--sh-leave-bg)] py-0.5 text-[var(--danger)]" title="Leave days">
+                  <div className="text-[9px] uppercase font-sans text-ink-3">LV</div>
+                  <div className="font-bold">{leave}</div>
+                </div>
+                <div className="rounded bg-[var(--surface)] py-0.5 text-ink-2" title="Rest / Days Off">
+                  <div className="text-[9px] uppercase font-sans text-ink-3">Off</div>
+                  <div className="font-bold">{off}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+          {filteredStats.length === 0 && (
+            <p className="text-[11.5px] text-ink-3 py-3 text-center">No employee matches "{search}".</p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

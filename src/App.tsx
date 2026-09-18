@@ -25,7 +25,9 @@ function Shell() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme;
-  }, [settings.theme]);
+    document.documentElement.dataset.fontSize = settings.fontSize ?? 'normal';
+    document.documentElement.dataset.fontFamily = settings.fontFamily ?? 'default';
+  }, [settings.theme, settings.fontSize, settings.fontFamily]);
 
   if (!ready) {
     return (

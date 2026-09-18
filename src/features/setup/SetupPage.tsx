@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { useStore } from '@/app/store';
 import { TONE_OPTIONS, toneVars } from '@/app/tones';
 import { Button, Field, Input, Modal, Select, Switch, cx, useToast } from '@/components/ui';
-import { importBackup, newId, resetToSeed } from '@/data/db';
+import { exportBackup, importBackup, newId, resetToSeed } from '@/data/db';
 import { WEEKDAY_LABELS } from '@/domain/calendar';
 import type { Line, ShiftCode, Weekday } from '@/domain/types';
 
@@ -164,32 +164,130 @@ export function SetupPage() {
           </div>
         </Section>
 
+        {/* ---------------------------------------------------- display */}
+        <Section title="Display & Fonts" description="Screen zoom, text size and font style preferences for this device.">
+          <div className="bg-[var(--surface)] px-4 py-4 flex flex-col gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <Field label="Screen Zoom" hint="Scales roster cells and columns.">
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={70}
+                    max={140}
+                    step={5}
+                    value={settings.zoomLevel ?? 100}
+                    onChange={(e) => void updateSettings({ zoomLevel: Number(e.target.value) })}
+                    className="w-24 font-mono text-center"
+                  />
+                  <span className="text-ink-3 text-[12px]">%</span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void updateSettings({ zoomLevel: 100 })}
+                    className="text-[11px]"
+                  >
+                    Reset
+                  </Button>
+                </div>
+              </Field>
+
+              <Field label="Font Size" hint="Adjusts text size throughout the application.">
+                <Select
+                  value={settings.fontSize ?? 'normal'}
+                  onChange={(e) => void updateSettings({ fontSize: e.target.value as 'compact' | 'normal' | 'large' })}
+                >
+                  <option value="compact">Compact (Smaller)</option>
+                  <option value="normal">Normal (Standard)</option>
+                  <option value="large">Large (More readable)</option>
+                </Select>
+              </Field>
+
+              <Field label="Font Family" hint="Select preferred typography.">
+                <Select
+                  value={settings.fontFamily ?? 'default'}
+                  onChange={(e) => void updateSettings({ fontFamily: e.target.value as 'default' | 'mono' | 'system' | 'sans' })}
+                >
+                  <option value="default">Inter (Default)</option>
+                  <option value="system">System Sans-Serif</option>
+                  <option value="mono">Monospace</option>
+                </Select>
+              </Field>
+            </div>
+          </div>
+        </Section>
+
         {/* ------------------------------------------------------- data */}
-        <Section title="Data" description="Everything lives in this browser. Back it up before you switch machines.">
-          <div className="bg-[var(--surface)] px-4 py-4 flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
-              Restore from backup
-            </Button>
-            <input
-              ref={fileInput}
-              type="file"
-              accept=".json"
-              hidden
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                try {
-                  await importBackup(await file.text());
-                  toast('Backup restored.', 'ok');
-                } catch (err) {
-                  toast(err instanceof Error ? err.message : 'Restore failed.', 'error');
-                }
-                e.target.value = '';
-              }}
-            />
-            <Button variant="danger" size="sm" onClick={() => setConfirmReset(true)}>
-              Reset to the September demo
-            </Button>
+        <Section title="Data & Backups" description="Everything is stored locally in your browser. Download a backup before switching machines or clearing your browser.">
+          <div className="bg-[var(--surface)] px-4 py-4 flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    const json = await exportBackup();
+                    const blob = new Blob([json], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `shiftline-backup-${new Date().toISOString().slice(0, 10)}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    toast('Backup downloaded successfully.', 'ok');
+                  } catch (err) {
+                    toast(err instanceof Error ? err.message : 'Export failed.', 'error');
+                  }
+                }}
+              >
+                Download backup (JSON)
+              </Button>
+
+              <Button variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
+                Restore from backup
+              </Button>
+              <input
+                ref={fileInput}
+                type="file"
+                accept=".json"
+                hidden
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    const text = await file.text();
+                    try {
+                      JSON.parse(text);
+                    } catch {
+                      throw new Error('Selected file is not valid JSON. Please upload a valid ShiftLine .json backup.');
+                    }
+                    await importBackup(text);
+                    toast('Backup restored successfully. Refreshing...', 'ok');
+                    setTimeout(() => {
+                      window.location.reload();
+                    }, 600);
+                  } catch (err) {
+                    toast(err instanceof Error ? err.message : 'Restore failed.', 'error');
+                  }
+                  e.target.value = '';
+                }}
+              />
+
+              <Button variant="danger" size="sm" onClick={() => setConfirmReset(true)}>
+                Reset to Demo Data (September 2026)
+              </Button>
+            </div>
+
+            {/* Explanatory note answering the client's question */}
+            <div className="rounded-lg bg-[var(--surface-2)] p-3 text-[12px] text-ink-3 leading-relaxed border border-[var(--line)]">
+              <p className="font-semibold text-ink-2 mb-1">
+                What does &ldquo;Reset to Demo Data&rdquo; mean?
+              </p>
+              <p>
+                This button reloads the pre-configured September 2026 sample roster (Line 4 &amp; 5, sample employees, and shifts) that came with the tool.
+                Use this if you want to wipe test changes and return to the initial demonstration state.
+                To preserve your work before resetting, click <strong>Download backup (JSON)</strong>.
+              </p>
+            </div>
           </div>
         </Section>
       </div>
@@ -232,9 +330,9 @@ export function SetupPage() {
       <Modal
         open={confirmReset}
         onClose={() => setConfirmReset(false)}
-        title="Reset everything?"
-        description="This wipes all lines, people, rosters and leave in this browser, then reloads the September 2026 demo data. It cannot be undone."
-        width={420}
+        title="Reset to Sample Demo Data?"
+        description="This will clear all current lines, people, rosters and custom changes in this browser, and restore the default September 2026 demonstration roster. This cannot be undone."
+        width={440}
         footer={
           <>
             <Button onClick={() => setConfirmReset(false)}>Cancel</Button>
@@ -243,16 +341,17 @@ export function SetupPage() {
               onClick={async () => {
                 await resetToSeed();
                 setConfirmReset(false);
-                toast('Reset to the September demo.', 'ok');
+                toast('Reset to demo data. Refreshing...', 'ok');
+                setTimeout(() => window.location.reload(), 600);
               }}
             >
-              Reset
+              Reset Data
             </Button>
           </>
         }
       >
         <p className="text-[12.5px] text-ink-2 leading-relaxed">
-          Export a backup first if you want to keep what is here.
+          If you have custom roster edits you wish to keep, cancel and click <strong>Download backup</strong> first.
         </p>
       </Modal>
     </div>
