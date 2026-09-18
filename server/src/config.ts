@@ -14,5 +14,7 @@ export const config = {
   groqModel: process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile',
   adminEmail: process.env.ADMIN_EMAIL ?? '',
   adminPassword: process.env.ADMIN_PASSWORD ?? '',
+  /** When true, /ai/ask works without signing in — for demos. Applying still needs a supervisor. */
+  aiPublic: (process.env.AI_PUBLIC ?? 'false').toLowerCase() === 'true',
   corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:5173').split(',').map((s) => s.trim()),
 };

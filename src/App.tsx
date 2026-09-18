@@ -6,6 +6,7 @@ import { monthLabel } from '@/domain/calendar';
 import { PeoplePage } from '@/features/people/PeoplePage';
 import { PlannerPage } from '@/features/planner/PlannerPage';
 import { SetupPage } from '@/features/setup/SetupPage';
+import { AssistantWidget } from '@/features/assistant/AssistantWidget';
 
 type Page = 'planner' | 'people' | 'setup';
 
@@ -90,6 +91,7 @@ function Shell() {
       {page === 'planner' && <PlannerPage />}
       {page === 'people' && <PeoplePage />}
       {page === 'setup' && <SetupPage />}
+      <AssistantWidget />
     </div>
   );
 }

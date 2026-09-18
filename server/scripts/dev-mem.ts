@@ -7,7 +7,7 @@ const child = spawn('npx', ['tsx', 'src/index.ts'], {
   detached: true,
   env: { ...process.env, PORT: process.env.PORT ?? '4000', MONGODB_URI: mongo.getUri('shiftline'),
     JWT_SECRET: 'dev-secret', ADMIN_EMAIL: 'sup@example.com', ADMIN_PASSWORD: 'supervisor1',
-    CORS_ORIGINS: 'http://localhost:5173,http://127.0.0.1:5173,http://127.0.0.1:5211' },
+    CORS_ORIGINS: 'http://localhost:5173,http://127.0.0.1:5173,http://127.0.0.1:5211', AI_PUBLIC: process.env.AI_PUBLIC ?? 'false' },
 });
 const stop = () => { try { process.kill(-child.pid!, 'SIGTERM'); } catch { child.kill(); } void mongo.stop(); process.exit(0); };
 process.on('SIGTERM', stop); process.on('SIGINT', stop);

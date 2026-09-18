@@ -2,13 +2,15 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import { ask, type AiContext } from '../ai.ts';
-import { requireAuth, requireSupervisor } from '../auth.ts';
+import { optionalAuth, requireAuth, requireSupervisor } from '../auth.ts';
+import { config } from '../config.ts';
 import { audit } from '../audit.ts';
 import { generateMonth, rosterId, setCell, type RosterMonth } from '../engine.ts';
 import { Employee, Leave, Roster, ShiftCode } from '../models.ts';
 
 export const aiRouter = Router();
-aiRouter.use(requireAuth);
+// Demo mode: questions without sign-in; applying to the stored month still needs a supervisor.
+aiRouter.use(config.aiPublic ? optionalAuth : requireAuth);
 
 const askShape = z.object({
   lineId: z.string(),
@@ -58,7 +60,7 @@ aiRouter.post('/ask', async (req, res) => {
 });
 
 /** Apply previously proposed actions to the stored month (server-side data). */
-aiRouter.post('/apply', requireSupervisor, async (req, res) => {
+aiRouter.post('/apply', requireAuth, requireSupervisor, async (req, res) => {
   const body = z
     .object({
       lineId: z.string(), year: z.number().int(), month: z.number().int(),

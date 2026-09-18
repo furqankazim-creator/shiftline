@@ -15,7 +15,7 @@ const app = express();
 app.use(cors({ origin: config.corsOrigins }));
 app.use(express.json({ limit: '10mb' }));
 
-app.get('/health', (_req, res) => res.json({ ok: true, ai: Boolean(config.groqApiKey) }));
+app.get('/health', (_req, res) => res.json({ ok: true, ai: Boolean(config.groqApiKey), aiPublic: config.aiPublic }));
 
 app.use('/auth', authRouter);
 app.use('/lines', linesRouter);

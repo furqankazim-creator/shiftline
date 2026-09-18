@@ -29,6 +29,7 @@ npm run typecheck
 | `JWT_SECRET` | long random string; signs sessions |
 | `GROQ_API_KEY` | enables `/ai/*`; without it the assistant returns a clear error |
 | `GROQ_MODEL` | default `llama-3.3-70b-versatile` |
+| `AI_PUBLIC` | `true` lets the chat work without signing in (demo mode); applying to stored data still needs a supervisor |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | first supervisor, created when the users collection is empty |
 | `CORS_ORIGINS` | comma-separated web origins (the Vercel URL, localhost) |
 | `PORT` | default 4000 |

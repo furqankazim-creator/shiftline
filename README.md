@@ -25,8 +25,8 @@ npm run build      # static bundle in dist/ — host anywhere, or open via any s
 
 `server/` is a Node + Express + MongoDB API with a Groq assistant. The web app
 works fully without it. With it, set `VITE_API_URL` at build time and the app
-gains **Setup › Cloud** (sign in, push / pull the dataset) and an **✦ Ask** tab
-in Insights. See [server/README.md](server/README.md).
+gains **Setup › Cloud** (sign in, push / pull the dataset) and an **Ask ShiftLine**
+chat bubble at the bottom-right of every screen (Ctrl+/). See [server/README.md](server/README.md).
 
 ## Layout
 

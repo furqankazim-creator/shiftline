@@ -37,6 +37,20 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
 }
 
+/** Attaches the user when a valid token is present; never rejects. */
+export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
+  const header = req.headers.authorization ?? '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (token) {
+    try {
+      req.user = jwt.verify(token, config.jwtSecret) as AuthUser;
+    } catch {
+      /* treat as anonymous */
+    }
+  }
+  next();
+}
+
 /** Viewers can read; only supervisors can change anything. */
 export function requireSupervisor(req: Request, res: Response, next: NextFunction) {
   if (req.user?.role !== 'supervisor') {

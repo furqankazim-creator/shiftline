@@ -71,6 +71,10 @@ export async function signIn(email: string, password: string): Promise<CloudUser
   return user;
 }
 
+/** Server capabilities, so the chat can skip sign-in when the server allows it. */
+export const health = () =>
+  fetch(API_URL + '/health').then((r) => r.json() as Promise<{ ok: boolean; ai: boolean; aiPublic: boolean }>);
+
 export const pushAll = (backupJson: string) =>
   call<{ ok: true; employees: number; rosters: number }>('/sync', { method: 'POST', body: backupJson });
 

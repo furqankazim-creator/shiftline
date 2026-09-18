@@ -9,9 +9,8 @@ import { monthTotals } from '@/domain/summary';
 import { OFF, type Issue } from '@/domain/types';
 import { suggestCover } from '@/domain/validate';
 
-import { AssistantTab } from './AssistantTab';
 
-type Tab = 'issues' | 'coverage' | 'fairness' | 'assistant';
+type Tab = 'issues' | 'coverage' | 'fairness';
 
 export function InsightsDrawer({
   open,
@@ -58,16 +57,14 @@ export function InsightsDrawer({
                   { value: 'issues', label: 'Issues' },
                   { value: 'coverage', label: 'Coverage' },
                   { value: 'fairness', label: 'Fairness' },
-                  { value: 'assistant', label: '✦ Ask' },
                 ]}
               />
             </div>
 
-            <div className={tab === 'assistant' ? 'flex-1 min-h-0 flex flex-col' : 'flex-1 overflow-y-auto'}>
+            <div className="flex-1 overflow-y-auto">
               {tab === 'issues' && <IssuesTab onJump={onJump} />}
               {tab === 'coverage' && <CoverageTab onJump={onJump} />}
               {tab === 'fairness' && <FairnessTab />}
-              {tab === 'assistant' && <AssistantTab />}
             </div>
     </div>
   );
