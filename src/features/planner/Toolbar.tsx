@@ -111,7 +111,7 @@ export function Toolbar({
             <span className="hidden lg:inline">Save</span>
           </Button>
           <span
-            className="hidden 2xl:inline-flex items-center gap-1 text-[11px] text-ink-3 font-medium"
+            className="hidden sm:inline-flex items-center gap-1 text-[11px] text-ink-3 font-medium"
             title="Changes are automatically preserved in browser database"
           >
             {saveStatus === 'saving' ? (

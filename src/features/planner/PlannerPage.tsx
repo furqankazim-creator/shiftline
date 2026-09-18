@@ -13,7 +13,7 @@ import { RotateModal } from './RotateModal';
 import { Toolbar } from './Toolbar';
 
 export function PlannerPage() {
-  const { undo, redo } = useStore();
+  const { undo, redo, saveRoster } = useStore();
   const toast = useToast();
 
   const [brush, setBrush] = useState<string | null>(null);
@@ -36,11 +36,15 @@ export function PlannerPage() {
         if (e.shiftKey) redo();
         else undo();
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        void saveRoster().then(() => toast('Roster saved successfully', 'ok'));
+      }
       if (e.key === 'Escape') setBrush(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo]);
+  }, [undo, redo, saveRoster, toast]);
 
   return (
     <div className="flex flex-1 min-h-0">
