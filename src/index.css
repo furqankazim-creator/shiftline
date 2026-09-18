@@ -134,17 +134,70 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+[data-font-size='xs'] {
+  font-size: 11.5px;
+}
+
 [data-font-size='compact'] {
   font-size: 13px;
+}
+
+[data-font-size='normal'] {
+  font-size: 14px;
 }
 
 [data-font-size='large'] {
   font-size: 15.5px;
 }
 
+[data-font-size='xl'] {
+  font-size: 17px;
+}
+
+/* Font Family definitions */
+[data-font-family='default'] body,
+[data-font-family='default'] select option {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+[data-font-family='roboto'] body,
+[data-font-family='roboto'] select option {
+  font-family: Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+[data-font-family='segoe'] body,
+[data-font-family='segoe'] select option {
+  font-family: "Segoe UI", Aptos, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+}
+
+[data-font-family='apple'] body,
+[data-font-family='apple'] select option {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+}
+
+[data-font-family='open-sans'] body,
+[data-font-family='open-sans'] select option {
+  font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+[data-font-family='plex'] body,
+[data-font-family='plex'] select option {
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
 [data-font-family='mono'] body,
 [data-font-family='mono'] select option {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+[data-font-family='calibri'] body,
+[data-font-family='calibri'] select option {
+  font-family: Calibri, Candara, "Segoe UI", Arial, sans-serif;
+}
+
+[data-font-family='serif'] body,
+[data-font-family='serif'] select option {
+  font-family: Georgia, Cambria, "Times New Roman", Times, serif;
 }
 
 [data-font-family='system'] body,

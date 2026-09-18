@@ -4,6 +4,8 @@ dist
 .DS_Store
 server/.env
 server/node_modules
+server/data
+server/mongodb-data
 .env
 .env.local
 .env.*.local

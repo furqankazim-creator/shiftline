@@ -158,17 +158,36 @@ export function Toolbar({
           </button>
         </div>
 
-        {/* Font size selection */}
-        <div className="hidden 2xl:flex items-center">
+        {/* Font size & family selection */}
+        <div className="hidden xl:flex items-center gap-1.5">
           <Select
             value={settings.fontSize ?? 'normal'}
-            onChange={(e) => void updateSettings({ fontSize: e.target.value as 'compact' | 'normal' | 'large' })}
+            onChange={(e) => void updateSettings({ fontSize: e.target.value as any })}
             className="h-7 text-[11.5px] border-[var(--line)] bg-[var(--surface-2)]"
             title="Font Size Selection"
           >
-            <option value="compact">Aa Compact</option>
-            <option value="normal">Aa Normal</option>
-            <option value="large">Aa Large</option>
+            <option value="xs">Aa Extra Compact (11.5px)</option>
+            <option value="compact">Aa Compact (13px)</option>
+            <option value="normal">Aa Normal (14px)</option>
+            <option value="large">Aa Large (15.5px)</option>
+            <option value="xl">Aa Extra Large (17px)</option>
+          </Select>
+
+          <Select
+            value={settings.fontFamily ?? 'default'}
+            onChange={(e) => void updateSettings({ fontFamily: e.target.value as any })}
+            className="h-7 text-[11.5px] border-[var(--line)] bg-[var(--surface-2)]"
+            title="Font Family Selection"
+          >
+            <option value="default">Font: Inter (Default)</option>
+            <option value="roboto">Font: Roboto</option>
+            <option value="segoe">Font: Segoe UI / Aptos</option>
+            <option value="apple">Font: SF Pro (Apple)</option>
+            <option value="open-sans">Font: Open Sans</option>
+            <option value="plex">Font: IBM Plex Sans</option>
+            <option value="mono">Font: JetBrains Mono</option>
+            <option value="calibri">Font: Calibri</option>
+            <option value="serif">Font: Georgia (Serif)</option>
           </Select>
         </div>
 
@@ -223,13 +242,13 @@ export function Toolbar({
                     </div>
                     <div className="px-3 py-1.5 text-[11px] text-ink-3">
                       Font size:
-                      <div className="mt-1 flex gap-1">
-                        {(['compact', 'normal', 'large'] as const).map((sz) => (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {(['xs', 'compact', 'normal', 'large', 'xl'] as const).map((sz) => (
                           <button
                             key={sz}
                             onClick={() => void updateSettings({ fontSize: sz })}
                             className={cx(
-                              'px-2 py-0.5 rounded text-[11px] capitalize',
+                              'px-2 py-0.5 rounded text-[10.5px] uppercase font-mono font-semibold',
                               (settings.fontSize ?? 'normal') === sz
                                 ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-bold'
                                 : 'bg-[var(--surface-2)] text-ink-2',
@@ -239,6 +258,24 @@ export function Toolbar({
                           </button>
                         ))}
                       </div>
+                    </div>
+                    <div className="px-3 py-1.5 text-[11px] text-ink-3">
+                      Font style:
+                      <Select
+                        value={settings.fontFamily ?? 'default'}
+                        onChange={(e) => void updateSettings({ fontFamily: e.target.value as any })}
+                        className="mt-1 w-full h-7 text-[11.5px] border-[var(--line)] bg-[var(--surface-2)]"
+                      >
+                        <option value="default">Inter (Default)</option>
+                        <option value="roboto">Roboto</option>
+                        <option value="segoe">Segoe UI / Aptos</option>
+                        <option value="apple">SF Pro (Apple)</option>
+                        <option value="open-sans">Open Sans</option>
+                        <option value="plex">IBM Plex Sans</option>
+                        <option value="mono">JetBrains Mono</option>
+                        <option value="calibri">Calibri</option>
+                        <option value="serif">Georgia (Serif)</option>
+                      </Select>
                     </div>
                   </motion.div>
                 )}

@@ -15,10 +15,10 @@ function required(name: string): string {
 
 export const config = {
   port: Number(process.env.PORT ?? 4400),
-  mongoUri: required('MONGODB_URI'),
-  jwtSecret: required('JWT_SECRET'),
+  mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27018/shiftline',
+  jwtSecret: process.env.JWT_SECRET || 'shiftline-super-secret-jwt-key-2026-persistent',
   groqApiKey: process.env.GROQ_API_KEY ?? '',
-  groqModel: process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile',
+  groqModel: process.env.GROQ_MODEL ?? 'openai/gpt-oss-120b',
   adminEmail: process.env.ADMIN_EMAIL ?? '',
   adminPassword: process.env.ADMIN_PASSWORD ?? '',
   /** When true, /ai/ask works without signing in — for demos. Applying still needs a supervisor. */

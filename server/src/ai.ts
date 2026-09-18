@@ -93,25 +93,40 @@ export async function ask(question: string, ctx: AiContext, history: { role: 'us
   }
   const groq = new Groq({ apiKey: config.groqApiKey });
 
-  const completion = await groq.chat.completions.create({
+  const messages = [
+    { role: 'system' as const, content: SYSTEM },
+    { role: 'user' as const, content: `ROSTER CONTEXT\n\n${describe(ctx)}` },
+    ...history.slice(-6),
+    { role: 'user' as const, content: question },
+  ];
+
+  // gpt-oss models reason before answering; give them room and keep the
+  // reasoning short, or the budget runs out before any JSON is written.
+  const base = {
     model: config.groqModel,
     temperature: 0.2,
-    max_tokens: 1200,
-    response_format: { type: 'json_object' },
-    messages: [
-      { role: 'system', content: SYSTEM },
-      { role: 'user', content: `ROSTER CONTEXT\n\n${describe(ctx)}` },
-      ...history.slice(-6),
-      { role: 'user', content: question },
-    ],
-  });
+    max_tokens: 4000,
+    messages,
+    ...(config.groqModel.includes('gpt-oss') ? { reasoning_effort: 'low' as const } : {}),
+  };
 
-  const raw = completion.choices[0]?.message?.content ?? '{}';
+  let raw = '';
+  try {
+    const strict = await groq.chat.completions.create({ ...base, response_format: { type: 'json_object' } });
+    raw = strict.choices[0]?.message?.content ?? '';
+  } catch (e) {
+    // Groq's strict JSON validation occasionally rejects a fine answer; fall
+    // back to a free-form completion and pull the JSON object out of it.
+    if (!(e instanceof Error && /json/i.test(e.message))) throw e;
+    const loose = await groq.chat.completions.create(base);
+    raw = loose.choices[0]?.message?.content ?? '';
+  }
+
   let parsed: { answer?: string; actions?: { employeeId?: string; day?: number; code?: string; reason?: string }[] };
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(extractJson(raw));
   } catch {
-    return { answer: raw, actions: [], preview: null };
+    return { answer: raw.trim() || 'I could not form an answer — please try rephrasing.', actions: [], preview: null };
   }
 
   const actions = validateActions(parsed.actions ?? [], ctx);
@@ -120,6 +135,18 @@ export async function ask(question: string, ctx: AiContext, history: { role: 'us
     actions: actions.accepted,
     preview: actions.accepted.length || actions.rejected.length ? preview(actions.accepted, actions.rejected, ctx) : null,
   };
+}
+
+/** The first balanced {...} in a string — tolerates prose or code fences around the JSON. */
+function extractJson(text: string): string {
+  const start = text.indexOf('{');
+  if (start === -1) throw new Error('no json');
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}' && --depth === 0) return text.slice(start, i + 1);
+  }
+  throw new Error('unbalanced json');
 }
 
 /** Drops anything the model made up: unknown people, codes, or days. */

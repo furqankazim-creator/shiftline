@@ -196,22 +196,31 @@ export function SetupPage() {
               <Field label="Font Size" hint="Adjusts text size throughout the application.">
                 <Select
                   value={settings.fontSize ?? 'normal'}
-                  onChange={(e) => void updateSettings({ fontSize: e.target.value as 'compact' | 'normal' | 'large' })}
+                  onChange={(e) => void updateSettings({ fontSize: e.target.value as any })}
                 >
-                  <option value="compact">Compact (Smaller)</option>
-                  <option value="normal">Normal (Standard)</option>
-                  <option value="large">Large (More readable)</option>
+                  <option value="xs">Extra Compact (11.5px — High Density)</option>
+                  <option value="compact">Compact (13px — Dense)</option>
+                  <option value="normal">Normal (14px — Standard)</option>
+                  <option value="large">Large (15.5px — Relaxed)</option>
+                  <option value="xl">Extra Large (17px — Maximum Readability)</option>
                 </Select>
               </Field>
 
-              <Field label="Font Family" hint="Select preferred typography.">
+              <Field label="Font Family" hint="Select preferred typography across the application.">
                 <Select
                   value={settings.fontFamily ?? 'default'}
-                  onChange={(e) => void updateSettings({ fontFamily: e.target.value as 'default' | 'mono' | 'system' | 'sans' })}
+                  onChange={(e) => void updateSettings({ fontFamily: e.target.value as any })}
                 >
-                  <option value="default">Inter (Default)</option>
-                  <option value="system">System Sans-Serif</option>
-                  <option value="mono">Monospace</option>
+                  <option value="default">Inter (Default Modern Sans)</option>
+                  <option value="roboto">Roboto (Clean Google Standard)</option>
+                  <option value="segoe">Segoe UI / Aptos (Office & Windows Standard)</option>
+                  <option value="apple">SF Pro / Apple System (Native macOS/iOS)</option>
+                  <option value="open-sans">Open Sans (Humanist High Readability)</option>
+                  <option value="plex">IBM Plex Sans (Industrial & Operations)</option>
+                  <option value="mono">JetBrains Mono (Monospace Table Columns)</option>
+                  <option value="calibri">Calibri (Classic Spreadsheet Font)</option>
+                  <option value="serif">Georgia (Classic Serif)</option>
+                  <option value="system">System Default Sans-Serif</option>
                 </Select>
               </Field>
             </div>

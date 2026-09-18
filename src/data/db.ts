@@ -3,6 +3,20 @@ import Dexie, { type EntityTable } from 'dexie';
 import type { Employee, LeaveBlock, Line, RosterMonth, ShiftCode } from '@/domain/types';
 import { SEED_CODES, SEED_EMPLOYEES, SEED_LEAVE, SEED_LINES } from './seed';
 
+export type FontSize = 'xs' | 'compact' | 'normal' | 'large' | 'xl';
+export type FontFamily =
+  | 'default'
+  | 'roboto'
+  | 'segoe'
+  | 'apple'
+  | 'open-sans'
+  | 'plex'
+  | 'mono'
+  | 'calibri'
+  | 'serif'
+  | 'system'
+  | 'sans';
+
 export interface Settings {
   key: 'app';
   theme: 'dark' | 'light';
@@ -14,8 +28,8 @@ export interface Settings {
   maxConsecutive: number;
   seeded: boolean;
   zoomLevel: number;
-  fontSize: 'compact' | 'normal' | 'large';
-  fontFamily: 'default' | 'mono' | 'system' | 'sans';
+  fontSize: FontSize;
+  fontFamily: FontFamily;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

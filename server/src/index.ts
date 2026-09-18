@@ -37,7 +37,7 @@ async function main() {
   await mongoose.connect(config.mongoUri);
   console.log('MongoDB connected');
   await seedAdmin();
-  const server = app.listen(config.port, () => console.log(`ShiftLine API on http://localhost:${config.port}`));
+  const server = app.listen(config.port, '0.0.0.0', () => console.log(`ShiftLine API on http://localhost:${config.port}`));
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       console.error(

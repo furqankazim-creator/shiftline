@@ -4,8 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "tsx scripts/dev-db.ts",
+    "dev:mem": "tsx scripts/dev-mem.ts",
+    "start": "tsx scripts/dev-db.ts",
+    "server": "tsx src/index.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
