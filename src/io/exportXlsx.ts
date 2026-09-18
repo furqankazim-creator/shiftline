@@ -280,3 +280,105 @@ export function downloadXlsx(input: ExportInput): string {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   return filename;
 }
+
+export interface BackupData {
+  lines: Line[];
+  employees: Employee[];
+  codes: ShiftCode[];
+  leave?: import('@/domain/types').LeaveBlock[];
+  rosters?: RosterMonth[];
+}
+
+export function buildBackupWorkbook(data: BackupData): XLSX.WorkBook {
+  const wb = XLSX.utils.book_new();
+
+  // 1. If rosters exist, append formatted roster sheets
+  if (data.rosters && data.rosters.length > 0 && data.lines.length > 0) {
+    for (const r of data.rosters) {
+      const line = data.lines.find((l) => l.id === r.lineId) ?? data.lines[0];
+      const emps = data.employees.filter((e) => e.lineId === r.lineId);
+      if (emps.length > 0) {
+        const rosterWb = buildWorkbook({ roster: r, employees: emps, codes: data.codes, line });
+        const firstSheetName = rosterWb.SheetNames[0];
+        if (firstSheetName && rosterWb.Sheets[firstSheetName]) {
+          XLSX.utils.book_append_sheet(wb, rosterWb.Sheets[firstSheetName], firstSheetName);
+        }
+      }
+    }
+  }
+
+  // 2. Employees sheet
+  const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const empRows = data.employees.map((e) => ({
+    'ID': e.id,
+    'Name': e.name,
+    'Contact #': e.contact,
+    'Line': data.lines.find((l) => l.id === e.lineId)?.name ?? e.lineId,
+    'Default Shift': e.defaultShift,
+    'Rest Days': e.restDays.map((d) => WEEKDAY_NAMES[d] ?? d).join(', '),
+    'Active': e.active !== false ? 'Yes' : 'No',
+    'Pinned': e.pinned ? 'Yes' : 'No',
+  }));
+  if (empRows.length > 0) {
+    const empSheet = XLSX.utils.json_to_sheet(empRows);
+    XLSX.utils.book_append_sheet(wb, empSheet, 'Employees');
+  }
+
+  // 3. Shift Codes sheet
+  const codeRows = data.codes.map((c) => ({
+    'Code': c.id,
+    'Shift Label': c.label,
+    'Timing': c.timing,
+    'Min Headcount': c.minHeadcount,
+    'Counts As Engineer': c.countsAsEngineer ? 'Yes' : 'No',
+    'Rotates': c.rotates ? 'Yes' : 'No',
+    'Is Status / Leave': c.isStatus ? 'Yes' : 'No',
+  }));
+  if (codeRows.length > 0) {
+    const codeSheet = XLSX.utils.json_to_sheet(codeRows);
+    XLSX.utils.book_append_sheet(wb, codeSheet, 'Shift Codes');
+  }
+
+  // 4. Lines sheet
+  const lineRows = data.lines.map((l) => ({
+    'Line ID': l.id,
+    'Line Name': l.name,
+    'Prefix': l.prefix,
+  }));
+  if (lineRows.length > 0) {
+    const lineSheet = XLSX.utils.json_to_sheet(lineRows);
+    XLSX.utils.book_append_sheet(wb, lineSheet, 'Lines');
+  }
+
+  // 5. Leave blocks
+  if (data.leave && data.leave.length > 0) {
+    const leaveRows = data.leave.map((l) => ({
+      'Employee': data.employees.find((e) => e.id === l.employeeId)?.name ?? l.employeeId,
+      'From Date': l.from,
+      'To Date': l.to,
+      'Status Code': l.code,
+      'Note': l.note ?? '',
+    }));
+    const leaveSheet = XLSX.utils.json_to_sheet(leaveRows);
+    XLSX.utils.book_append_sheet(wb, leaveSheet, 'Leave');
+  }
+
+  return wb;
+}
+
+export function downloadBackupXlsx(data: BackupData): string {
+  const wb = buildBackupWorkbook(data);
+  const filename = `ShiftLine_Backup_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  const bytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx', cellStyles: true });
+  const blob = new Blob([bytes], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return filename;
+}
+

@@ -3,10 +3,9 @@ import { useRef, useState } from 'react';
 import { useStore } from '@/app/store';
 import { TONE_OPTIONS, toneVars } from '@/app/tones';
 import { Button, Field, Input, Modal, Select, Switch, cx, useToast } from '@/components/ui';
-import { exportBackup, importBackup, newId, resetToSeed } from '@/data/db';
+import { exportBackup, importBackup, importBackupData, newId, resetToSeed } from '@/data/db';
 import { WEEKDAY_LABELS } from '@/domain/calendar';
 import type { Line, ShiftCode, Weekday } from '@/domain/types';
-
 import { CloudSection } from './CloudSection';
 
 export function SetupPage() {
@@ -240,6 +239,28 @@ export function SetupPage() {
                 size="sm"
                 onClick={async () => {
                   try {
+                    const [{ getFullBackupData }, { downloadBackupXlsx }] = await Promise.all([
+                      import('@/data/db'),
+                      import('@/io/exportXlsx'),
+                    ]);
+                    const data = await getFullBackupData();
+                    const filename = downloadBackupXlsx(data);
+                    toast(`Excel backup downloaded: ${filename}`, 'ok');
+                  } catch (err) {
+                    toast(err instanceof Error ? err.message : 'Excel export failed.', 'error');
+                  }
+                }}
+                title="Download all rosters, employees, shift codes, and lines in an Excel spreadsheet (.xlsx)"
+                className="font-medium"
+              >
+                Download backup (Excel .xlsx)
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  try {
                     const json = await exportBackup();
                     const blob = new Blob([json], { type: 'application/json' });
                     const url = URL.createObjectURL(blob);
@@ -248,35 +269,39 @@ export function SetupPage() {
                     a.download = `shiftline-backup-${new Date().toISOString().slice(0, 10)}.json`;
                     a.click();
                     URL.revokeObjectURL(url);
-                    toast('Backup downloaded successfully.', 'ok');
+                    toast('JSON backup downloaded successfully.', 'ok');
                   } catch (err) {
                     toast(err instanceof Error ? err.message : 'Export failed.', 'error');
                   }
                 }}
+                title="Download complete raw database dump as JSON"
               >
                 Download backup (JSON)
               </Button>
 
               <Button variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
-                Restore from backup
+                Restore from backup (.xlsx or .json)
               </Button>
               <input
                 ref={fileInput}
                 type="file"
-                accept=".json"
+                accept=".xlsx,.xls,.json"
                 hidden
                 onChange={async (e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
                   try {
-                    const text = await file.text();
-                    try {
-                      JSON.parse(text);
-                    } catch {
-                      throw new Error('Selected file is not valid JSON. Please upload a valid ShiftLine .json backup.');
+                    if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+                      const buf = await file.arrayBuffer();
+                      const { importBackupWorkbook } = await import('@/io/importXlsx');
+                      const parsed = importBackupWorkbook(buf);
+                      await importBackupData(parsed);
+                      toast('Excel backup restored successfully! Refreshing...', 'ok');
+                    } else {
+                      const text = await file.text();
+                      await importBackup(text);
+                      toast('JSON backup restored successfully! Refreshing...', 'ok');
                     }
-                    await importBackup(text);
-                    toast('Backup restored successfully. Refreshing...', 'ok');
                     setTimeout(() => {
                       window.location.reload();
                     }, 600);
@@ -295,12 +320,19 @@ export function SetupPage() {
             {/* Explanatory note answering the client's question */}
             <div className="rounded-lg bg-[var(--surface-2)] p-3 text-[12px] text-ink-3 leading-relaxed border border-[var(--line)]">
               <p className="font-semibold text-ink-2 mb-1">
+                Backup Formats: Excel (.xlsx) vs JSON
+              </p>
+              <p className="mb-2">
+                <strong>Excel (.xlsx)</strong> produces a real workbook you can open in Microsoft Excel, view and edit employees, shift codes, and monthly rosters.
+                <strong> JSON (.json)</strong> is a technical data file used to clone your exact system state between browsers. Both can be restored using the <em>Restore from backup</em> button above.
+              </p>
+              <p className="font-semibold text-ink-2 mb-1">
                 What does &ldquo;Reset to Demo Data&rdquo; mean?
               </p>
               <p>
                 This button reloads the pre-configured September 2026 sample roster (Line 4 &amp; 5, sample employees, and shifts) that came with the tool.
                 Use this if you want to wipe test changes and return to the initial demonstration state.
-                To preserve your work before resetting, click <strong>Download backup (JSON)</strong>.
+                To preserve your work before resetting, click <strong>Download backup (Excel .xlsx)</strong>.
               </p>
             </div>
           </div>

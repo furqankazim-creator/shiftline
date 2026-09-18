@@ -2,7 +2,7 @@ import XLSX from 'xlsx-js-style';
 
 import { MONTH_ABBR, daysInMonth } from '@/domain/calendar';
 import { inferDefaultShift, inferRestDays, inferRotations } from '@/domain/generator';
-import { OFF, type Employee, type LeaveBlock, type RotationRule, type Weekday } from '@/domain/types';
+import { OFF, type Employee, type LeaveBlock, type Line, type RotationRule, type ShiftCode, type Weekday } from '@/domain/types';
 
 export interface ImportedEmployee {
   name: string;
@@ -257,4 +257,79 @@ export function toRecords(
   });
 
   return { employees, leave };
+}
+
+/**
+ * Restores data from an Excel workbook (.xlsx).
+ * Handles both full backup workbooks (with Employees/Codes tabs) and single/multi-month roster workbooks.
+ */
+export function importBackupWorkbook(buffer: ArrayBuffer): {
+  employees: Employee[];
+  lines?: Line[];
+  codes?: ShiftCode[];
+  leave?: LeaveBlock[];
+} {
+  const wb = XLSX.read(buffer, { type: 'array', cellStyles: true });
+  const sheetNames = wb.SheetNames;
+
+  // Case 1: Workbook contains an 'Employees' sheet (Full ShiftLine backup)
+  if (sheetNames.includes('Employees')) {
+    const empSheet = wb.Sheets['Employees'];
+    const empRows: any[] = XLSX.utils.sheet_to_json(empSheet);
+    const DAY_MAP: Record<string, Weekday> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+
+    const employees: Employee[] = empRows.map((r, i) => {
+      const restText = String(r['Rest Days'] ?? '').toLowerCase();
+      const restDays: Weekday[] = restText
+        .split(',')
+        .map((s) => s.trim().slice(0, 3))
+        .filter((s) => s in DAY_MAP)
+        .map((s) => DAY_MAP[s]);
+
+      return {
+        id: String(r['ID'] ?? `e${i + 1}`),
+        name: String(r['Name'] ?? 'Employee'),
+        contact: String(r['Contact #'] ?? r['Contact'] ?? ''),
+        lineId: String(r['Line'] ?? 'line5').toLowerCase().replace(/\s+/g, ''),
+        defaultShift: String(r['Default Shift'] ?? 'M'),
+        restDays: restDays.length ? restDays : [5, 6],
+        order: i + 1,
+        active: String(r['Active'] ?? 'yes').toLowerCase() !== 'no',
+        pinned: String(r['Pinned'] ?? 'no').toLowerCase() === 'yes',
+      };
+    });
+
+    const lines: Line[] = sheetNames.includes('Lines')
+      ? (XLSX.utils.sheet_to_json(wb.Sheets['Lines']) as any[]).map((r, i) => ({
+          id: String(r['Line ID'] ?? `line${i + 1}`),
+          name: String(r['Line Name'] ?? `Line ${i + 1}`),
+          prefix: String(r['Prefix'] ?? 'SLV'),
+          order: i + 1,
+        }))
+      : [];
+
+    const codes: ShiftCode[] = sheetNames.includes('Shift Codes')
+      ? (XLSX.utils.sheet_to_json(wb.Sheets['Shift Codes']) as any[]).map((r, i) => ({
+          id: String(r['Code'] ?? `C${i}`),
+          label: String(r['Shift Label'] ?? r['Label'] ?? r['Code']),
+          timing: String(r['Timing'] ?? '08:00 – 17:00'),
+          minHeadcount: Number(r['Min Headcount'] ?? 0),
+          countsAsEngineer: String(r['Counts As Engineer'] ?? 'yes').toLowerCase() === 'yes',
+          rotates: String(r['Rotates'] ?? 'no').toLowerCase() === 'yes',
+          isStatus: String(r['Is Status / Leave'] ?? 'no').toLowerCase() === 'yes',
+          tone: 'general' as const,
+          order: i + 1,
+        }))
+      : [];
+
+    return {
+      employees,
+      lines: lines.length ? lines : undefined,
+      codes: codes.length ? codes : undefined,
+    };
+  }
+
+  // Case 2: Standard roster workbook — parse first valid roster sheet
+  const firstSheet = importSheet(buffer);
+  return toRecords(firstSheet, 'line5', (_n, i) => `e${String(i + 1).padStart(2, '0')}`);
 }

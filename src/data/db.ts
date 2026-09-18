@@ -98,8 +98,7 @@ export async function patchSettings(patch: Partial<Settings>): Promise<void> {
   await db.settings.put({ ...current, ...patch, key: 'app' });
 }
 
-/** Full backup — everything the app knows, as one JSON file. */
-export async function exportBackup(): Promise<string> {
+export async function getFullBackupData() {
   const [lines, employees, codes, leave, rosters, settings] = await Promise.all([
     db.lines.toArray(),
     db.employees.toArray(),
@@ -108,17 +107,22 @@ export async function exportBackup(): Promise<string> {
     db.rosters.toArray(),
     getSettings(),
   ]);
+  return { lines, employees, codes, leave, rosters, settings };
+}
+
+/** Full backup — everything the app knows, as one JSON file. */
+export async function exportBackup(): Promise<string> {
+  const data = await getFullBackupData();
   return JSON.stringify(
-    { version: 1, exportedAt: new Date().toISOString(), lines, employees, codes, leave, rosters, settings },
+    { version: 1, exportedAt: new Date().toISOString(), ...data },
     null,
     2,
   );
 }
 
-export async function importBackup(json: string): Promise<void> {
-  const data = JSON.parse(json);
+export async function importBackupData(data: any): Promise<void> {
   if (!data || typeof data !== 'object' || !Array.isArray(data.employees)) {
-    throw new Error('That file is not a ShiftLine backup.');
+    throw new Error('That file is not a valid ShiftLine backup (missing employee records).');
   }
   await db.transaction(
     'rw',
@@ -128,14 +132,24 @@ export async function importBackup(json: string): Promise<void> {
         db.lines.clear(), db.employees.clear(), db.codes.clear(),
         db.leave.clear(), db.rosters.clear(),
       ]);
-      await db.lines.bulkPut(data.lines ?? SEED_LINES);
-      await db.codes.bulkPut(data.codes ?? SEED_CODES);
+      await db.lines.bulkPut(data.lines?.length ? data.lines : SEED_LINES);
+      await db.codes.bulkPut(data.codes?.length ? data.codes : SEED_CODES);
       await db.employees.bulkPut(data.employees);
       await db.leave.bulkPut(data.leave ?? []);
       await db.rosters.bulkPut(data.rosters ?? []);
       if (data.settings) await db.settings.put({ ...data.settings, key: 'app', seeded: true });
     },
   );
+}
+
+export async function importBackup(json: string): Promise<void> {
+  let data: any;
+  try {
+    data = JSON.parse(json);
+  } catch {
+    throw new Error('Selected file is not valid JSON. Please upload a valid ShiftLine .json backup.');
+  }
+  await importBackupData(data);
 }
 
 /** Wipes everything and reloads the shipped September demo. */
