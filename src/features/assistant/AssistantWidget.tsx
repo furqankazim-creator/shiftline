@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 
 import {
-  askAssistant, cloudEnabled, getUser, health, signIn, type AiAction, type AiReply, type CloudUser,
+  API_URL, askAssistant, cloudEnabled, getUser, health, signIn, type AiAction, type AiReply, type CloudUser,
 } from '@/app/api';
 import { useStore } from '@/app/store';
 import { toneVars } from '@/app/tones';
@@ -116,11 +116,17 @@ function Chat({ onClose }: { onClose: () => void }) {
   const toast = useToast();
   const [user, setUser] = useState<CloudUser | null>(getUser());
   const [publicAi, setPublicAi] = useState<boolean | null>(null);
+  const [serverDown, setServerDown] = useState(false);
   const [turns, setTurns] = useState<Turn[]>([]);
 
   // Ask the server once whether the chat is open to everyone.
   useEffect(() => {
-    health().then((h) => setPublicAi(Boolean(h.aiPublic))).catch(() => setPublicAi(false));
+    health()
+      .then((h) => setPublicAi(Boolean(h.aiPublic)))
+      .catch(() => {
+        setServerDown(true);
+        setPublicAi(false);
+      });
   }, []);
   const canChat = Boolean(user) || publicAi === true;
   const [input, setInput] = useState('');
@@ -190,6 +196,15 @@ function Chat({ onClose }: { onClose: () => void }) {
 
       {publicAi === null ? (
         <div className="flex-1 grid place-items-center text-[12px] text-ink-3">Connecting…</div>
+      ) : serverDown ? (
+        <div className="flex-1 flex flex-col justify-center gap-2 px-6 text-center">
+          <p className="text-[13px] font-medium">The server isn't running</p>
+          <p className="text-[12px] text-ink-3 leading-relaxed">
+            The assistant lives on the ShiftLine API, and nothing answered at{' '}
+            <code className="font-mono text-ink-2">{API_URL}</code>. Start it with{' '}
+            <code className="font-mono text-ink-2">cd server &amp;&amp; npm run dev</code>, then reopen this chat.
+          </p>
+        </div>
       ) : !canChat ? (
         <SignIn onDone={setUser} />
       ) : (

@@ -21,9 +21,10 @@ export function CloudSection() {
   if (!cloudEnabled()) {
     return (
       <div className="bg-[var(--surface)] px-4 py-4 text-[12.5px] text-ink-3 leading-relaxed">
-        Not connected to a server. This install runs entirely in the browser. To enable sign-in, shared
-        data and the assistant, deploy the API in <code className="font-mono">server/</code> and set{' '}
-        <code className="font-mono">VITE_API_URL</code> when building the app.
+        This copy of the app has no server address, so it runs entirely in this browser — no sharing, no
+        assistant. To connect one: run the API (<code className="font-mono">cd server &amp;&amp; npm run dev</code>)
+        and start the app with <code className="font-mono">VITE_API_URL</code> pointing at it — for local work that is
+        already set in <code className="font-mono">.env.development</code>; on Vercel add it under Environment Variables.
       </div>
     );
   }

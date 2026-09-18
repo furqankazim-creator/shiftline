@@ -15,6 +15,6 @@ export const config = {
   adminEmail: process.env.ADMIN_EMAIL ?? '',
   adminPassword: process.env.ADMIN_PASSWORD ?? '',
   /** When true, /ai/ask works without signing in — for demos. Applying still needs a supervisor. */
-  aiPublic: (process.env.AI_PUBLIC ?? 'false').toLowerCase() === 'true',
+  aiPublic: (process.env.AI_PUBLIC ?? 'true').toLowerCase() !== 'false',
   corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:5173').split(',').map((s) => s.trim()),
 };
