@@ -21,12 +21,24 @@ npm test           # 67 tests, incl. cell-for-cell reproduction of the real Sept
 npm run build      # static bundle in dist/ — host anywhere, or open via any static server
 ```
 
+## Assistant
+
+The **Ask ShiftLine** chat bubble (bottom-right, Ctrl+/) works in either of two ways:
+
+- **No server** — paste a free Groq key from console.groq.com/keys under
+  **Setup › Assistant** (or straight into the chat when it asks). The browser
+  calls Groq itself; the key stays on that device.
+- **Through the server** — when `VITE_API_URL` points at a running API, the
+  chat uses the server's key and no per-browser key is needed.
+
+The chat prefers the server when one answers, and falls back to the browser key otherwise.
+
 ## Server (optional)
 
 `server/` is a Node + Express + MongoDB API with a Groq assistant. The web app
 works fully without it. With it, set `VITE_API_URL` at build time and the app
-gains **Setup › Cloud** (sign in, push / pull the dataset) and an **Ask ShiftLine**
-chat bubble at the bottom-right of every screen (Ctrl+/). See [server/README.md](server/README.md).
+gains **Setup › Cloud** (sign in, push / pull the dataset) and the server-side
+assistant. See [server/README.md](server/README.md).
 
 ## Layout
 

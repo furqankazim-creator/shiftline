@@ -6,6 +6,7 @@ import { Button, Field, Input, Modal, Select, Switch, cx, useToast } from '@/com
 import { exportBackup, importBackup, importBackupData, newId, resetToSeed } from '@/data/db';
 import { WEEKDAY_LABELS } from '@/domain/calendar';
 import type { Line, ShiftCode, Weekday } from '@/domain/types';
+import { AssistantSection } from './AssistantSection';
 import { CloudSection } from './CloudSection';
 
 export function SetupPage() {
@@ -227,7 +228,11 @@ export function SetupPage() {
         </Section>
 
         {/* ------------------------------------------------------- data */}
-        <Section title="Cloud" description="Sign in to share the roster across devices and use the assistant.">
+        <Section title="Assistant" description="Let the chat run straight from this browser, with no server.">
+          <AssistantSection />
+        </Section>
+
+        <Section title="Cloud" description="Sign in to share the roster across devices and use the assistant through the server.">
           <CloudSection />
         </Section>
 
