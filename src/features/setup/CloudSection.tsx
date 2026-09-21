@@ -21,8 +21,8 @@ export function CloudSection() {
   if (!cloudEnabled()) {
     return (
       <div className="bg-[var(--surface)] px-4 py-4 text-[12.5px] text-ink-3 leading-relaxed">
-        This copy of the app has no server address, so it runs entirely in this browser — no sharing between
-        devices. The assistant still works with a Groq key from the section above. To connect a server: run the API (<code className="font-mono">cd server &amp;&amp; npm run dev</code>)
+        This copy of the app has no server address, so it runs entirely in this browser — no sharing, no
+        assistant. To connect one: run the API (<code className="font-mono">cd server &amp;&amp; npm run dev</code>)
         and start the app with <code className="font-mono">VITE_API_URL</code> pointing at it — for local work that is
         already set in <code className="font-mono">.env.development</code>; on Vercel add it under Environment Variables.
       </div>

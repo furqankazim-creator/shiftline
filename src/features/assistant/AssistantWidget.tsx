@@ -2,14 +2,12 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
 
 import {
-  API_URL, askAssistant, cloudEnabled, getUser, health, signIn, type AiAction, type AiReply, type CloudUser,
+  askAssistant, cloudEnabled, getUser, health, signIn, type AiAction, type AiReply, type CloudUser,
 } from '@/app/api';
 import { useStore } from '@/app/store';
 import { toneVars } from '@/app/tones';
 import { useViewport } from '@/app/useViewport';
 import { Button, cx, useToast } from '@/components/ui';
-
-import { askDirect, getGroqKey, setGroqKey } from './direct';
 
 interface Turn {
   role: 'user' | 'assistant';
@@ -67,6 +65,8 @@ export function AssistantWidget() {
     return () => window.removeEventListener('keydown', onKey);
   }, [open]);
 
+  if (!cloudEnabled()) return null;
+
   const mobile = viewport === 'mobile';
 
   return (
@@ -116,18 +116,11 @@ function Chat({ onClose }: { onClose: () => void }) {
   const toast = useToast();
   const [user, setUser] = useState<CloudUser | null>(getUser());
   const [publicAi, setPublicAi] = useState<boolean | null>(null);
-  const [serverDown, setServerDown] = useState(!cloudEnabled());
-  const [hasKey, setHasKey] = useState(() => getGroqKey().length > 0);
+  const [serverDown, setServerDown] = useState(false);
   const [turns, setTurns] = useState<Turn[]>([]);
 
-  // Ask the server once whether the chat is open to everyone. No server (or
-  // none configured) is not a dead end: the browser can talk to Groq itself
-  // with the key saved in Setup.
+  // Ask the server once whether the chat is open to everyone.
   useEffect(() => {
-    if (!cloudEnabled()) {
-      setPublicAi(false);
-      return;
-    }
     health()
       .then((h) => setPublicAi(Boolean(h.aiPublic)))
       .catch(() => {
@@ -135,10 +128,7 @@ function Chat({ onClose }: { onClose: () => void }) {
         setPublicAi(false);
       });
   }, []);
-  // Route: the server when it answers; otherwise the browser's own key.
-  const viaServer = !serverDown && (Boolean(user) || publicAi === true);
-  const viaKey = !viaServer && hasKey;
-  const canChat = viaServer || viaKey;
+  const canChat = Boolean(user) || publicAi === true;
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
@@ -162,27 +152,19 @@ function Chat({ onClose }: { onClose: () => void }) {
     setTurns((t) => [...t, { role: 'user', content: q }]);
     setBusy(true);
     try {
-      const history = turns.slice(-6).map((t) => ({ role: t.role, content: t.content }));
-      const reply = viaKey
-        ? await askDirect(q, { roster, employees, codes, leave }, history)
-        : await askAssistant({
-            lineId: settings.activeLineId,
-            year: settings.activeYear,
-            month: settings.activeMonth,
-            question: q,
-            history,
-            context: { roster, employees, codes, leave },
-          });
+      const reply = await askAssistant({
+        lineId: settings.activeLineId,
+        year: settings.activeYear,
+        month: settings.activeMonth,
+        question: q,
+        history: turns.slice(-6).map((t) => ({ role: t.role, content: t.content })),
+        context: { roster, employees, codes, leave },
+      });
       setTurns((t) => [...t, { role: 'assistant', content: reply.answer, reply }]);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'The assistant is unavailable.';
       // A lapsed session drops back to the sign-in form instead of a dead end.
       if (/sign in/i.test(msg) && !publicAi) setUser(null);
-      // A bad key drops back to the key panel so it can be re-entered.
-      if (viaKey && /rejected the key/i.test(msg)) {
-        setGroqKey('');
-        setHasKey(false);
-      }
       setTurns((t) => [...t, { role: 'assistant', content: msg }]);
     } finally {
       setBusy(false);
@@ -204,7 +186,7 @@ function Chat({ onClose }: { onClose: () => void }) {
         <div className="flex flex-col leading-tight">
           <span className="text-[13px] font-semibold">ShiftLine Assistant</span>
           <span className="text-[10.5px] text-ink-3">
-            {viaServer && user ? `${user.email} · ` : ''}{viaKey ? 'your key · ' : ''}{monthName(settings.activeMonth)} {settings.activeYear}
+            {user ? `${user.email} · ` : ''}{monthName(settings.activeMonth)} {settings.activeYear}
           </span>
         </div>
         <button onClick={onClose} className="ml-auto grid h-7 w-7 place-items-center rounded-md text-ink-3 hover:text-ink hover:bg-[var(--surface-3)]">
@@ -214,8 +196,14 @@ function Chat({ onClose }: { onClose: () => void }) {
 
       {publicAi === null ? (
         <div className="flex-1 grid place-items-center text-[12px] text-ink-3">Connecting…</div>
-      ) : !canChat && (serverDown || !cloudEnabled()) ? (
-        <KeyPanel onDone={() => setHasKey(true)} />
+      ) : serverDown ? (
+        <div className="flex-1 flex flex-col justify-center gap-2 px-6 text-center">
+          <p className="text-[13px] font-medium">The assistant is offline</p>
+          <p className="text-[12px] text-ink-3 leading-relaxed">
+            The ShiftLine server is not running. Start it with{' '}
+            <code className="font-mono text-ink-2">cd server &amp;&amp; npm run dev</code>, then reopen this chat.
+          </p>
+        </div>
       ) : !canChat ? (
         <SignIn onDone={setUser} />
       ) : (
@@ -352,55 +340,6 @@ function Chat({ onClose }: { onClose: () => void }) {
 }
 
 /* ---------------------------------------------------------------- sign-in */
-
-/**
- * Shown when no server answered: the chat can still run on the supervisor's
- * own Groq key, saved in this browser. Same field as Setup → Assistant.
- */
-function KeyPanel({ onDone }: { onDone: () => void }) {
-  const [key, setKey] = useState('');
-  const serverHint = cloudEnabled()
-    ? <>Nothing answered at <code className="font-mono text-ink-2">{API_URL}</code>.</>
-    : <>This copy of the app has no server address.</>;
-
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!key.trim()) return;
-        setGroqKey(key);
-        onDone();
-      }}
-      className="flex-1 flex flex-col justify-center gap-3 px-6"
-    >
-      <p className="text-[13px] font-medium">Chat without the server</p>
-      <p className="-mt-2 text-[12px] text-ink-3 leading-relaxed">
-        {serverHint} Paste a free Groq API key and the assistant runs straight from this browser — no server
-        needed. Get one at{' '}
-        <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" className="underline text-ink-2">
-          console.groq.com/keys
-        </a>
-        . It stays on this device only.
-      </p>
-      <input
-        type="password"
-        autoComplete="off"
-        placeholder="gsk_…"
-        value={key}
-        onChange={(e) => setKey(e.target.value)}
-        className="h-10 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] px-3 text-[13px] font-mono focus:border-[var(--accent)] focus:outline-none"
-      />
-      <Button variant="primary" type="submit" disabled={!key.trim()}>
-        Save key and chat
-      </Button>
-      {cloudEnabled() && (
-        <p className="text-[11px] text-ink-3 leading-relaxed">
-          Prefer the server? Start it with <code className="font-mono text-ink-2">cd server &amp;&amp; npm run dev</code> and reopen this chat.
-        </p>
-      )}
-    </form>
-  );
-}
 
 function SignIn({ onDone }: { onDone: (u: CloudUser) => void }) {
   const [email, setEmail] = useState('');
