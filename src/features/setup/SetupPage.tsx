@@ -6,7 +6,6 @@ import { Button, Field, Input, Modal, Select, Switch, cx, useToast } from '@/com
 import { exportBackup, importBackup, importBackupData, newId, resetToSeed } from '@/data/db';
 import { WEEKDAY_LABELS } from '@/domain/calendar';
 import type { Line, ShiftCode, Weekday } from '@/domain/types';
-import { CloudSection } from './CloudSection';
 
 export function SetupPage() {
   const {
@@ -227,10 +226,6 @@ export function SetupPage() {
         </Section>
 
         {/* ------------------------------------------------------- data */}
-        <Section title="Cloud" description="Sign in to share the roster across devices and use the assistant through the server.">
-          <CloudSection />
-        </Section>
-
         <Section title="Data & Backups" description="Everything is stored locally in your browser. Download a backup before switching machines or clearing your browser.">
           <div className="bg-[var(--surface)] px-4 py-4 flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">

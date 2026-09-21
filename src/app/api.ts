@@ -75,11 +75,6 @@ export async function signIn(email: string, password: string): Promise<CloudUser
 export const health = () =>
   fetch(API_URL + '/health').then((r) => r.json() as Promise<{ ok: boolean; ai: boolean; aiPublic: boolean }>);
 
-export const pushAll = (backupJson: string) =>
-  call<{ ok: true; employees: number; rosters: number }>('/sync', { method: 'POST', body: backupJson });
-
-export const pullAll = () => call<Record<string, unknown>>('/sync');
-
 export interface AiAction {
   employeeId: string;
   dayIndex: number;
