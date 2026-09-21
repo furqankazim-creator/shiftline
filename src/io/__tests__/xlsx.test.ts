@@ -5,8 +5,8 @@ import XLSX from 'xlsx-js-style';
 
 import { SEED_CODES, SEED_EMPLOYEES, SEED_LEAVE, SEED_LINES } from '@/data/seed';
 import { generateMonth } from '@/domain/generator';
-import { buildWorkbook } from '@/io/exportXlsx';
-import { importSheet, listSheets, toRecords } from '@/io/importXlsx';
+import { BACKUP_SHEET, buildBackupWorkbook, buildWorkbook } from '@/io/exportXlsx';
+import { importBackupWorkbook, importSheet, listSheets, toRecords } from '@/io/importXlsx';
 
 /** The client's real workbook, kept as a fixture so the parser can't drift. */
 const SOURCE = fileURLToPath(new URL('./Roster_September.xlsx', import.meta.url));
@@ -154,5 +154,43 @@ describe('export', () => {
       expect(back.employees[i].name).toBe(e.name);
       expect(back.employees[i].codes).toEqual(roster.cells[e.id].map((c) => c.code));
     });
+  });
+});
+
+describe('Excel backup round-trip', () => {
+  const roster = generateMonth({
+    year: 2026, month: 9, lineId: 'line5',
+    employees: SEED_EMPLOYEES, leaveBlocks: SEED_LEAVE, overrides: { [SEED_EMPLOYEES[0].id]: { 3: 'N' } },
+  });
+  const data = { lines: SEED_LINES, employees: SEED_EMPLOYEES, codes: SEED_CODES, leave: SEED_LEAVE, rosters: [roster], settings: { key: 'app', activeLineId: 'line5' } };
+  const bytes = XLSX.write(buildBackupWorkbook(data), { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+  const wb = XLSX.read(bytes, { type: 'array' });
+
+  it('keeps the readable sheets and hides the data sheet', () => {
+    expect(wb.SheetNames).toEqual(expect.arrayContaining(['Employees', 'Shift Codes', 'Lines', 'Leave', BACKUP_SHEET]));
+    expect(wb.Workbook?.Sheets?.[wb.SheetNames.indexOf(BACKUP_SHEET)]?.Hidden).toBe(1);
+  });
+
+  it('restores rosters, leave, colours and rotations exactly', () => {
+    const back = importBackupWorkbook(bytes);
+    expect(back.employees).toEqual(SEED_EMPLOYEES);
+    expect(back.codes).toEqual(SEED_CODES);
+    expect(back.lines).toEqual(SEED_LINES);
+    expect(back.leave).toEqual(SEED_LEAVE);
+    expect(back.rosters).toHaveLength(1);
+    expect(back.rosters?.[0].cells[SEED_EMPLOYEES[0].id][3].code).toBe('N');
+    expect(back.rosters?.[0].overrides).toEqual(roster.overrides);
+    expect(back.settings).toEqual(data.settings);
+  });
+
+  it('still reads a backup whose hidden sheet was removed, mapping line names back to ids', () => {
+    const stripped = XLSX.utils.book_new();
+    for (const name of wb.SheetNames.filter((n) => n !== BACKUP_SHEET)) {
+      XLSX.utils.book_append_sheet(stripped, wb.Sheets[name], name);
+    }
+    const bytes2 = XLSX.write(stripped, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+    const back = importBackupWorkbook(bytes2);
+    expect(back.employees).toHaveLength(SEED_EMPLOYEES.length);
+    expect(new Set(back.employees.map((e) => e.lineId))).toEqual(new Set(SEED_EMPLOYEES.map((e) => e.lineId)));
   });
 });

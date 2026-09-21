@@ -2,7 +2,7 @@ import XLSX from 'xlsx-js-style';
 
 import { MONTH_ABBR, daysInMonth } from '@/domain/calendar';
 import { inferDefaultShift, inferRestDays, inferRotations } from '@/domain/generator';
-import { OFF, type Employee, type LeaveBlock, type Line, type RotationRule, type ShiftCode, type Weekday } from '@/domain/types';
+import { OFF, type Employee, type LeaveBlock, type Line, type RosterMonth, type RotationRule, type ShiftCode, type Weekday } from '@/domain/types';
 
 export interface ImportedEmployee {
   name: string;
@@ -263,20 +263,47 @@ export function toRecords(
  * Restores data from an Excel workbook (.xlsx).
  * Handles both full backup workbooks (with Employees/Codes tabs) and single/multi-month roster workbooks.
  */
+/** Hidden sheet written by buildBackupWorkbook; mirrors BACKUP_SHEET in exportXlsx. */
+const BACKUP_SHEET = '_ShiftLine';
+
 export function importBackupWorkbook(buffer: ArrayBuffer): {
   employees: Employee[];
   lines?: Line[];
   codes?: ShiftCode[];
   leave?: LeaveBlock[];
+  rosters?: RosterMonth[];
+  settings?: unknown;
 } {
   const wb = XLSX.read(buffer, { type: 'array', cellStyles: true });
   const sheetNames = wb.SheetNames;
 
-  // Case 1: Workbook contains an 'Employees' sheet (Full ShiftLine backup)
+  // Case 0: a backup this app wrote — the hidden sheet holds everything exactly.
+  if (sheetNames.includes(BACKUP_SHEET)) {
+    const rows = XLSX.utils.sheet_to_json<string[]>(wb.Sheets[BACKUP_SHEET], { header: 1 });
+    const json = rows.slice(1).map((r) => String(r[0] ?? '')).join('');
+    try {
+      return JSON.parse(json);
+    } catch {
+      throw new Error('The backup data inside this workbook is damaged. Restore from an unedited copy.');
+    }
+  }
+
+  // Case 1: Workbook contains an 'Employees' sheet (backup edited by hand in Excel)
   if (sheetNames.includes('Employees')) {
     const empSheet = wb.Sheets['Employees'];
     const empRows: any[] = XLSX.utils.sheet_to_json(empSheet);
     const DAY_MAP: Record<string, Weekday> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+
+    const lines: Line[] = sheetNames.includes('Lines')
+      ? (XLSX.utils.sheet_to_json(wb.Sheets['Lines']) as any[]).map((r, i) => ({
+          id: String(r['Line ID'] ?? `line${i + 1}`),
+          name: String(r['Line Name'] ?? `Line ${i + 1}`),
+          prefix: String(r['Prefix'] ?? 'SLV'),
+          order: i + 1,
+        }))
+      : [];
+    // The Employees sheet shows the line's display name; map it back to the id.
+    const lineIdByName = new Map(lines.map((l) => [l.name.toLowerCase(), l.id]));
 
     const employees: Employee[] = empRows.map((r, i) => {
       const restText = String(r['Rest Days'] ?? '').toLowerCase();
@@ -290,7 +317,7 @@ export function importBackupWorkbook(buffer: ArrayBuffer): {
         id: String(r['ID'] ?? `e${i + 1}`),
         name: String(r['Name'] ?? 'Employee'),
         contact: String(r['Contact #'] ?? r['Contact'] ?? ''),
-        lineId: String(r['Line'] ?? 'line5').toLowerCase().replace(/\s+/g, ''),
+        lineId: lineIdByName.get(String(r['Line'] ?? '').toLowerCase()) ?? String(r['Line'] ?? 'line5').toLowerCase().replace(/\s+/g, ''),
         defaultShift: String(r['Default Shift'] ?? 'M'),
         restDays: restDays.length ? restDays : [5, 6],
         order: i + 1,
@@ -298,15 +325,6 @@ export function importBackupWorkbook(buffer: ArrayBuffer): {
         pinned: String(r['Pinned'] ?? 'no').toLowerCase() === 'yes',
       };
     });
-
-    const lines: Line[] = sheetNames.includes('Lines')
-      ? (XLSX.utils.sheet_to_json(wb.Sheets['Lines']) as any[]).map((r, i) => ({
-          id: String(r['Line ID'] ?? `line${i + 1}`),
-          name: String(r['Line Name'] ?? `Line ${i + 1}`),
-          prefix: String(r['Prefix'] ?? 'SLV'),
-          order: i + 1,
-        }))
-      : [];
 
     const codes: ShiftCode[] = sheetNames.includes('Shift Codes')
       ? (XLSX.utils.sheet_to_json(wb.Sheets['Shift Codes']) as any[]).map((r, i) => ({

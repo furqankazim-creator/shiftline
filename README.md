@@ -17,7 +17,7 @@ npm run dev        # opens http://localhost:5173
 ```
 
 ```bash
-npm test           # 67 tests, incl. cell-for-cell reproduction of the real Sept 2026 sheet
+npm test           # 70 tests, incl. cell-for-cell reproduction of the real Sept 2026 sheet
 npm run build      # static bundle in dist/ — host anywhere, or open via any static server
 ```
 

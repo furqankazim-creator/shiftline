@@ -287,7 +287,18 @@ export interface BackupData {
   codes: ShiftCode[];
   leave?: import('@/domain/types').LeaveBlock[];
   rosters?: RosterMonth[];
+  settings?: unknown;
 }
+
+/**
+ * Hidden sheet carrying the whole backup as JSON, so restoring an .xlsx is
+ * exact. The visible sheets are for reading in Excel; they don't hold enough
+ * (rosters, leave, colours, rotations) to rebuild the database from.
+ */
+export const BACKUP_SHEET = '_ShiftLine';
+const BACKUP_MARK = 'ShiftLine backup v1 — do not edit';
+/** Excel caps a cell at 32,767 characters. */
+const CHUNK = 30000;
 
 export function buildBackupWorkbook(data: BackupData): XLSX.WorkBook {
   const wb = XLSX.utils.book_new();
@@ -362,6 +373,15 @@ export function buildBackupWorkbook(data: BackupData): XLSX.WorkBook {
     const leaveSheet = XLSX.utils.json_to_sheet(leaveRows);
     XLSX.utils.book_append_sheet(wb, leaveSheet, 'Leave');
   }
+
+  // 6. Exact copy of everything, hidden, for restore
+  const json = JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), ...data });
+  const chunks: string[][] = [[BACKUP_MARK]];
+  for (let i = 0; i < json.length; i += CHUNK) chunks.push([json.slice(i, i + CHUNK)]);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(chunks), BACKUP_SHEET);
+  wb.Workbook ??= {};
+  wb.Workbook.Sheets ??= [];
+  wb.Workbook.Sheets[wb.SheetNames.indexOf(BACKUP_SHEET)] = { Hidden: 1 };
 
   return wb;
 }
