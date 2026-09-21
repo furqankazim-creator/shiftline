@@ -101,10 +101,14 @@ export function Toolbar({
             size="sm"
             variant="outline"
             onClick={async () => {
-              await saveRoster();
-              toast('Roster saved to browser database.', 'ok');
+              try {
+                const f = await saveRoster();
+                toast(f ? `Saved. Downloaded ${f}` : 'Saved.', 'ok');
+              } catch (err) {
+                toast(err instanceof Error ? err.message : 'Save failed.', 'error');
+              }
             }}
-            title="Save changes to browser database"
+            title="Save (Ctrl+S): keeps changes in this browser and downloads an Excel backup file"
             className="flex items-center gap-1.5"
           >
             <DiskIcon />

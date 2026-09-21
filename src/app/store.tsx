@@ -31,7 +31,8 @@ interface RosterStore {
   canUndo: boolean;
   canRedo: boolean;
   saveStatus: 'saved' | 'saving';
-  saveRoster: () => Promise<void>;
+  /** Persists the month and downloads an Excel backup; resolves to the filename. */
+  saveRoster: () => Promise<string>;
 
   setMonth(year: number, month: number): void;
   stepMonth(delta: number): void;
@@ -157,11 +158,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /**
+   * Explicit Save: persist the month (already auto-saved on every edit) and
+   * also hand the supervisor a file — the full Excel backup, which restores
+   * exactly. Returns the downloaded filename.
+   */
   const saveRoster = useCallback(async () => {
-    if (!roster) return;
+    if (!roster) return '';
     setSaveStatus('saving');
     await db.rosters.put(roster);
     setSaveStatus('saved');
+    const [{ getFullBackupData }, { downloadBackupXlsx }] = await Promise.all([
+      import('@/data/db'),
+      import('@/io/exportXlsx'),
+    ]);
+    return downloadBackupXlsx(await getFullBackupData());
   }, [roster]);
 
   const commit = useCallback(
