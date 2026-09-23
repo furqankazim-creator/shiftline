@@ -27,14 +27,13 @@ export interface ImportResult {
 
 const KNOWN_WORKED = ['M', 'E', 'N', 'GS', 'P', 'MT', 'ET', 'NT', 'ML', 'EL', 'NL'];
 
-/** Parses a title like "Line 5_SEP-2026 Roster" into its parts. */
+/** Parses a title like "Line 5_SEP-2026 Roster" or "SEPTEMBER 2026 RST L5" into its parts. */
 function parseTitle(title: string): { lineName: string | null; year: number | null; month: number | null } {
-  // Deliberately not `\b` before the month: underscore counts as a word
-  // character, so `\b` never matches in "Line 5_SEP-2026" — the exact shape
-  // the client's own sheets use. The month abbreviation is validated against
-  // MONTH_ABBR below, which is what keeps this from over-matching.
-  const monthMatch = title.match(/(?:^|[^A-Za-z])([A-Za-z]{3})[-_ ]?(\d{4})/);
-  const lineMatch = title.match(/Line\s*(\d+)/i);
+  // Matches full month names or 3-letter abbreviations, followed by an optional separator, and a 4-digit year.
+  // Example: "SEP-2026", "SEPTEMBER 2026"
+  const monthMatch = title.match(/(?:^|[^A-Za-z])([A-Za-z]{3})[A-Za-z]*[-_ ]*(\d{4})/i);
+  // Matches "Line 5", "Line5", "L5", "L 5"
+  const lineMatch = title.match(/(?:Line|L)\s*(\d+)/i);
   const monthIndex = monthMatch ? MONTH_ABBR.indexOf(monthMatch[1].toUpperCase()) : -1;
   return {
     lineName: lineMatch ? `Line ${lineMatch[1]}` : null,
@@ -45,6 +44,39 @@ function parseTitle(title: string): { lineName: string | null; year: number | nu
 
 export function listSheets(buffer: ArrayBuffer): string[] {
   return XLSX.read(buffer, { type: 'array', cellStyles: true }).SheetNames;
+}
+
+export function normalizeShiftCode(raw: string, isRed?: boolean): string {
+  const text = raw.trim();
+  if (isRed && (!text || text === OFF || /^off$/i.test(text))) return 'LV';
+  if (!text || text === '-' || /^off$/i.test(text) || /^tbd$/i.test(text)) return OFF;
+
+  if (/^flrt/i.test(text)) return 'FLRT';
+  if (/leave|annual|vacation|sick|\blv\b/i.test(text)) return 'LV';
+
+  const upper = text.toUpperCase();
+  if (KNOWN_WORKED.includes(upper)) return upper;
+
+  // Verbose operational shift formats (e.g., "Morning Early | 06:00-16:30 | 10.5H")
+  if (/^morning/i.test(text)) {
+    if (/morning\s*t/i.test(text)) return 'MT';
+    if (/morning\s*l/i.test(text)) return 'ML';
+    return 'M';
+  }
+  if (/^evening/i.test(text)) {
+    if (/evening\s*t/i.test(text)) return 'ET';
+    if (/evening\s*l/i.test(text)) return 'EL';
+    return 'E';
+  }
+  if (/^night/i.test(text)) {
+    if (/night\s*t/i.test(text)) return 'NT';
+    if (/night\s*l/i.test(text)) return 'NL';
+    return 'N';
+  }
+  if (/^general/i.test(text) || /^gs\b/i.test(text)) return 'GS';
+  if (/^project/i.test(text) || /^p\b/i.test(text)) return 'P';
+
+  return upper;
 }
 
 /**
@@ -88,8 +120,7 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
   }
   if (headerRow === -1) {
     throw new Error(
-      'Could not find a "Name" header row — is this a roster sheet? ' +
-      'Make sure the sheet has a header row containing "Name" or "Employee".',
+      'Could not find a "Name" or "Employee" header row — is this a roster sheet?',
     );
   }
 
@@ -102,9 +133,23 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
     month ??= fromName.month;
     lineName ??= fromName.lineName;
   }
+  // If still not found, inspect header cells for date formats like "Sat 19-Sep-2026"
+  if (!year || !month) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = at(headerRow, c);
+      const textVal = String(cell?.w || cell?.v || '');
+      const parsed = parseTitle(textVal);
+      if (parsed.year && parsed.month) {
+        year ??= parsed.year;
+        month ??= parsed.month;
+        lineName ??= parsed.lineName;
+        break;
+      }
+    }
+  }
   if (!year || !month) {
     throw new Error(
-      `Could not work out the month from "${title}". Expected something like "Line 5_SEP-2026 Roster".`,
+      `Could not work out the month from "${title}". Expected something with month and year like "Line 5_SEP-2026" or "SEPTEMBER 2026".`,
     );
   }
 
@@ -113,9 +158,24 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
   // are never misread as day numbers even if they contain small integers.
   const dayCols: { day: number; col: number }[] = [];
   for (let c = nameCol + 2; c <= range.e.c; c++) {
-    const v = at(headerRow, c)?.v;
-    const n = typeof v === 'number' ? v : Number(v);
-    if (Number.isInteger(n) && n >= 1 && n <= 31) dayCols.push({ day: n, col: c });
+    const cell = at(headerRow, c);
+    const v = cell?.v;
+    const w = String(cell?.w || v || '').trim();
+
+    let n = typeof v === 'number' ? v : Number(w);
+    if (!Number.isInteger(n)) {
+      // If it's text like "Sat 19-Sep-2026" or "19 Sep", extract the day number
+      const m = w.match(/(?:^|[^\d])([1-9]|[12]\d|3[01])(?:[-/\s]+[A-Za-z]{3,}|[-/\s]+\d{2,4}\b)/);
+      if (m) n = Number(m[1]);
+      else {
+        const m2 = w.match(/\b([1-9]|[12]\d|3[01])\b/);
+        if (m2) n = Number(m2[1]);
+      }
+    }
+
+    if (Number.isInteger(n) && n >= 1 && n <= 31) {
+      if (!dayCols.some((d) => d.day === n)) dayCols.push({ day: n, col: c });
+    }
   }
   dayCols.sort((a, b) => a.day - b.day);
 
@@ -133,8 +193,16 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
   for (let r = headerRow + 1; r <= range.e.r; r++) {
     const rowName = text(r, nameCol);
     if (!rowName) continue;
-    // The weekday repeat row and the headcount rows end the employee block.
-    if (/count|total|days=>/i.test(rowName)) break;
+
+    // Skip section headers (e.g. "PIC Morning shift", "MP Night shift") and count rows
+    const isCountRow = /count|total|days=>|generated by/i.test(rowName);
+    const isSectionHeader =
+      /^(?:pic|mp|engineer|technician|staff|operator)?\s*(?:morning|evening|night|general|project)\s+shift$/i.test(rowName) ||
+      (NAME_ALIASES.has(rowName.toLowerCase()) && r !== headerRow);
+
+    if (isCountRow || isSectionHeader) {
+      continue;
+    }
 
     const codes: string[] = [];
     const leaveDays: number[] = [];
@@ -142,17 +210,13 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
     for (let i = 0; i < expected; i++) {
       const entry = dayCols[i];
       const cell = entry ? at(r, entry.col) : undefined;
-      let code = String(cell?.v ?? '').trim();
-
-      // A red fill marks a leave block; the cell itself is usually empty.
+      const rawCode = String(cell?.w || cell?.v || '').trim();
       const isRed = isRedFill(cell);
 
-      if (code.toUpperCase().startsWith('FLRT')) code = 'FLRT';
-      if (isRed && (code === '' || code === OFF)) {
-        code = 'LV';
+      let code = normalizeShiftCode(rawCode, isRed);
+      if (code === 'LV') {
         leaveDays.push(i + 1);
       }
-      if (code === '') code = OFF;
 
       codes.push(code);
       if (code !== OFF && code !== 'LV' && code !== 'FLRT' && !KNOWN_WORKED.includes(code)) {
@@ -170,9 +234,12 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
     const defaultShift = inferDefaultShift(codes, workedSet, 'GS');
     const rotations = inferRotations(codes, workedSet);
 
+    // Pick contact or role from adjacent column
+    const contactOrRole = text(r, nameCol + 1);
+
     employees.push({
       name: rowName,
-      contact: text(r, nameCol + 1), // contact # is always one column to the right of Name
+      contact: contactOrRole,
       codes,
       restDays,
       defaultShift,

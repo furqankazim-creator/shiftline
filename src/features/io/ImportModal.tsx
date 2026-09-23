@@ -160,9 +160,10 @@ export function ImportModal({
             }}
           />
           <p className="mt-4 text-[11.5px] text-ink-3 leading-relaxed max-w-sm mx-auto">
-            Works with sheets laid out like yours: a title such as{' '}
-            <span className="font-mono text-ink-2">Line 5_SEP-2026 Roster</span>, a{' '}
-            <span className="font-mono text-ink-2">Name</span> header row, and one column per day.
+            Works with both simple rosters and operational roster sheets (such as{' '}
+            <span className="font-mono text-ink-2">Line 5_SEP-2026</span> or{' '}
+            <span className="font-mono text-ink-2">SEPTEMBER 2026 RST L5</span>). Detects employee names,
+            shift schedules, rotations, and leave automatically.
           </p>
         </div>
       )}
