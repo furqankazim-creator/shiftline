@@ -172,7 +172,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       import('@/data/db'),
       import('@/io/exportXlsx'),
     ]);
-    return downloadBackupXlsx(await getFullBackupData());
+    return downloadBackupXlsx(await getFullBackupData(), {
+      activeLineId: roster.lineId,
+      activeYear: roster.year,
+      activeMonth: roster.month,
+    });
   }, [roster]);
 
   const commit = useCallback(

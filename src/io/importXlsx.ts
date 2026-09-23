@@ -68,16 +68,29 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
   const at = (r: number, c: number) => sheet[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined;
   const text = (r: number, c: number) => String(at(r, c)?.v ?? '').trim();
 
-  // ---- locate the header row (the one whose first cell is "Name") -------
+  // ---- locate the header row and which column holds employee names -------
+  // The client's various Excel versions place "Name" (or an alias) anywhere
+  // in the first 5 columns and first 20 rows, so we scan broadly.
+  const NAME_ALIASES = new Set([
+    'name', 'names', 'employee', 'employee name', 'staff', 'staff name',
+    'engineer', 'personnel', 'worker',
+  ]);
   let headerRow = -1;
-  for (let r = range.s.r; r <= Math.min(range.e.r, 12); r++) {
-    if (text(r, 0).toLowerCase() === 'name') {
-      headerRow = r;
-      break;
+  let nameCol = 0; // column index that holds the employee name
+  outer: for (let r = range.s.r; r <= Math.min(range.e.r, 20); r++) {
+    for (let c = range.s.c; c <= Math.min(range.e.c, 5); c++) {
+      if (NAME_ALIASES.has(text(r, c).toLowerCase())) {
+        headerRow = r;
+        nameCol = c;
+        break outer;
+      }
     }
   }
   if (headerRow === -1) {
-    throw new Error('Could not find a "Name" header row — is this a roster sheet?');
+    throw new Error(
+      'Could not find a "Name" header row — is this a roster sheet? ' +
+      'Make sure the sheet has a header row containing "Name" or "Employee".',
+    );
   }
 
   // ---- month and year --------------------------------------------------
@@ -96,8 +109,10 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
   }
 
   // ---- day columns: numeric headers on the header row ------------------
+  // Start scanning after nameCol+1 (Name + Contact columns) so those cols
+  // are never misread as day numbers even if they contain small integers.
   const dayCols: { day: number; col: number }[] = [];
-  for (let c = range.s.c; c <= range.e.c; c++) {
+  for (let c = nameCol + 2; c <= range.e.c; c++) {
     const v = at(headerRow, c)?.v;
     const n = typeof v === 'number' ? v : Number(v);
     if (Number.isInteger(n) && n >= 1 && n <= 31) dayCols.push({ day: n, col: c });
@@ -116,7 +131,7 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
   const unknown = new Set<string>();
 
   for (let r = headerRow + 1; r <= range.e.r; r++) {
-    const rowName = text(r, 0);
+    const rowName = text(r, nameCol);
     if (!rowName) continue;
     // The weekday repeat row and the headcount rows end the employee block.
     if (/count|total|days=>/i.test(rowName)) break;
@@ -157,7 +172,7 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
 
     employees.push({
       name: rowName,
-      contact: text(r, 1),
+      contact: text(r, nameCol + 1), // contact # is always one column to the right of Name
       codes,
       restDays,
       defaultShift,

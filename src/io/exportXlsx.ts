@@ -300,20 +300,47 @@ const BACKUP_MARK = 'ShiftLine backup v1 — do not edit';
 /** Excel caps a cell at 32,767 characters. */
 const CHUNK = 30000;
 
-export function buildBackupWorkbook(data: BackupData): XLSX.WorkBook {
+export function buildBackupWorkbook(data: BackupData, active?: ActiveRosterHint): XLSX.WorkBook {
   const wb = XLSX.utils.book_new();
 
   // 1. If rosters exist, append formatted roster sheets
   if (data.rosters && data.rosters.length > 0 && data.lines.length > 0) {
-    for (const r of data.rosters) {
+    // Sort: active line+month first, then newest year/month, skip empty lines
+    const sortedRosters = [...data.rosters].sort((a, b) => {
+      const aIsActive =
+        active &&
+        a.lineId === active.activeLineId &&
+        a.year === active.activeYear &&
+        a.month === active.activeMonth;
+      const bIsActive =
+        active &&
+        b.lineId === active.activeLineId &&
+        b.year === active.activeYear &&
+        b.month === active.activeMonth;
+      if (aIsActive && !bIsActive) return -1;
+      if (!aIsActive && bIsActive) return 1;
+      // Otherwise: same line together, then newest first
+      if (a.lineId === b.lineId) {
+        if (a.year !== b.year) return b.year - a.year;
+        return b.month - a.month;
+      }
+      // Active line's other months before other lines
+      if (active) {
+        if (a.lineId === active.activeLineId) return -1;
+        if (b.lineId === active.activeLineId) return 1;
+      }
+      return a.lineId.localeCompare(b.lineId);
+    });
+
+    for (const r of sortedRosters) {
       const line = data.lines.find((l) => l.id === r.lineId) ?? data.lines[0];
       const emps = data.employees.filter((e) => e.lineId === r.lineId);
-      if (emps.length > 0) {
-        const rosterWb = buildWorkbook({ roster: r, employees: emps, codes: data.codes, line });
-        const firstSheetName = rosterWb.SheetNames[0];
-        if (firstSheetName && rosterWb.Sheets[firstSheetName]) {
-          XLSX.utils.book_append_sheet(wb, rosterWb.Sheets[firstSheetName], firstSheetName);
-        }
+      // Skip rosters where no real employees exist for this line
+      if (emps.length === 0) continue;
+      const rosterWb = buildWorkbook({ roster: r, employees: emps, codes: data.codes, line });
+      const firstSheetName = rosterWb.SheetNames[0];
+      if (firstSheetName && rosterWb.Sheets[firstSheetName]) {
+        XLSX.utils.book_append_sheet(wb, rosterWb.Sheets[firstSheetName], firstSheetName);
       }
     }
   }
@@ -386,8 +413,14 @@ export function buildBackupWorkbook(data: BackupData): XLSX.WorkBook {
   return wb;
 }
 
-export function downloadBackupXlsx(data: BackupData): string {
-  const wb = buildBackupWorkbook(data);
+export interface ActiveRosterHint {
+  activeLineId: string;
+  activeYear: number;
+  activeMonth: number;
+}
+
+export function downloadBackupXlsx(data: BackupData, active?: ActiveRosterHint): string {
+  const wb = buildBackupWorkbook(data, active);
   const filename = `ShiftLine_Backup_${new Date().toISOString().slice(0, 10)}.xlsx`;
   const bytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx', cellStyles: true });
   const blob = new Blob([bytes], {
