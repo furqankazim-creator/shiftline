@@ -57,20 +57,17 @@ export function normalizeShiftCode(raw: string, isRed?: boolean): string {
   const upper = text.toUpperCase();
   if (KNOWN_WORKED.includes(upper)) return upper;
 
-  // Verbose operational shift formats (e.g., "Morning Early | 06:00-16:30 | 10.5H")
+  // Verbose operational shift formats (e.g., "Morning Early | 06:00-16:30 | 10.5H", "Morning Late", "Night Early")
   if (/^morning/i.test(text)) {
-    if (/morning\s*t/i.test(text)) return 'MT';
-    if (/morning\s*l/i.test(text)) return 'ML';
+    if (/morning\s*t(?:arget|\b)/i.test(text)) return 'MT';
     return 'M';
   }
   if (/^evening/i.test(text)) {
-    if (/evening\s*t/i.test(text)) return 'ET';
-    if (/evening\s*l/i.test(text)) return 'EL';
+    if (/evening\s*t(?:arget|\b)/i.test(text)) return 'ET';
     return 'E';
   }
   if (/^night/i.test(text)) {
-    if (/night\s*t/i.test(text)) return 'NT';
-    if (/night\s*l/i.test(text)) return 'NL';
+    if (/night\s*t(?:arget|\b)/i.test(text)) return 'NT';
     return 'N';
   }
   if (/^general/i.test(text) || /^gs\b/i.test(text)) return 'GS';
