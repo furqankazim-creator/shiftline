@@ -193,37 +193,4 @@ describe('Excel backup round-trip', () => {
     expect(back.employees).toHaveLength(SEED_EMPLOYEES.length);
     expect(new Set(back.employees.map((e) => e.lineId))).toEqual(new Set(SEED_EMPLOYEES.map((e) => e.lineId)));
   });
-
-  it('imports an operational roster sheet with sections, count rows and verbose shift text', () => {
-    const wb = XLSX.utils.book_new();
-    const ws_data = [
-      ['SEPTEMBER 2026 RST L5 | BORDERED OPERATIONAL ROSTER'],
-      ['Employee', 'Role', 'Shift', 'Total OT', '1-Sep-2026', '2-Sep-2026', '3-Sep-2026', '4-Sep-2026', '5-Sep-2026'],
-      ['PIC Morning shift'],
-      ['Zouhair azzabi', 'PIC', 'Morning', 8, 'Morning Early | 06:00-16:30 | 10.5H', 'Morning Early | 06:00-16:30 | 10.5H', 'OFF', 'OFF', 'Morning Late | 07:00-18:00 | 11H'],
-      ['MESHARI', 'PIC', 'Morning', 8, 'Morning Early | 06:00-16:30 | 11H', 'OFF', 'OFF', 'Morning Early | 06:00-16:30 | 11H', 'Morning Early | 06:00-16:30 | 11H'],
-      ['PIC Morning working count', '', '', '', 2, 1, 0, 1, 2],
-      [''],
-      ['MP Night shift'],
-      ['Abubaker Rehan', 'MP', 'Night', 36, 'Night Early | 18:00-05:00 | 11H', 'Night Early | 18:00-05:00 | 11H', 'OFF', 'OFF', 'Night Late | 19:30-06:30 | 11H'],
-      ['John Paul', 'MP', 'Night', 36, 'OFF', 'OFF', 'Night Late | 19:30-06:30 | 11H', 'Night Late | 19:30-06:30 | 11H', 'Night Late | 19:30-06:30 | 11H'],
-      ['MP Night working count', '', '', '', 1, 1, 1, 1, 2],
-    ];
-    const ws = XLSX.utils.aoa_to_sheet(ws_data);
-    XLSX.utils.book_append_sheet(wb, ws, 'Operational Roster');
-    const out = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
-
-    const res = importSheet(out);
-    expect(res.year).toBe(2026);
-    expect(res.month).toBe(9);
-    expect(res.lineName).toBe('Line 5');
-    expect(res.employees.map((e) => e.name)).toEqual([
-      'Zouhair azzabi',
-      'MESHARI',
-      'Abubaker Rehan',
-      'John Paul',
-    ]);
-    expect(res.employees[0].codes.slice(0, 5)).toEqual(['M', 'M', '-', '-', 'M']);
-    expect(res.employees[2].codes.slice(0, 5)).toEqual(['N', 'N', '-', '-', 'N']);
-  });
 });

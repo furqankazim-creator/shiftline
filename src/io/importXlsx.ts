@@ -57,17 +57,20 @@ export function normalizeShiftCode(raw: string, isRed?: boolean): string {
   const upper = text.toUpperCase();
   if (KNOWN_WORKED.includes(upper)) return upper;
 
-  // Verbose operational shift formats (e.g., "Morning Early | 06:00-16:30 | 10.5H", "Morning Late", "Night Early")
+  // Verbose operational shift formats (e.g., "Morning Early | 06:00-16:30 | 10.5H")
   if (/^morning/i.test(text)) {
-    if (/morning\s*t(?:arget|\b)/i.test(text)) return 'MT';
+    if (/morning\s*t/i.test(text)) return 'MT';
+    if (/morning\s*l/i.test(text)) return 'ML';
     return 'M';
   }
   if (/^evening/i.test(text)) {
-    if (/evening\s*t(?:arget|\b)/i.test(text)) return 'ET';
+    if (/evening\s*t/i.test(text)) return 'ET';
+    if (/evening\s*l/i.test(text)) return 'EL';
     return 'E';
   }
   if (/^night/i.test(text)) {
-    if (/night\s*t(?:arget|\b)/i.test(text)) return 'NT';
+    if (/night\s*t/i.test(text)) return 'NT';
+    if (/night\s*l/i.test(text)) return 'NL';
     return 'N';
   }
   if (/^general/i.test(text) || /^gs\b/i.test(text)) return 'GS';
@@ -157,15 +160,24 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
   for (let c = nameCol + 2; c <= range.e.c; c++) {
     const cell = at(headerRow, c);
     const v = cell?.v;
-    const w = String(cell?.w || v || '').trim();
+    // Prefer formatted text (cell.w) — critical for date-serial cells where
+    // cell.v is a large integer like 46701 and cell.w is "01-Sep-2026".
+    const w = String(cell?.w || '').trim() || String(v ?? '').trim();
 
-    let n = typeof v === 'number' ? v : Number(w);
-    if (!Number.isInteger(n)) {
-      // If it's text like "Sat 19-Sep-2026" or "19 Sep", extract the day number
-      const m = w.match(/(?:^|[^\d])([1-9]|[12]\d|3[01])(?:[-/\s]+[A-Za-z]{3,}|[-/\s]+\d{2,4}\b)/);
-      if (m) n = Number(m[1]);
-      else {
-        const m2 = w.match(/\b([1-9]|[12]\d|3[01])\b/);
+    let n: number = NaN;
+
+    // Only use v directly when it's already a valid day number (1–31).
+    // Date serials (>31) must go through text parsing instead.
+    if (typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 31) {
+      n = v;
+    } else {
+      // Parse text like "Tue 01-Sep-2026", "01-Sep-2026", "19 Sep", "19"
+      // Support zero-padded days (01–09) and two-digit days (10–31).
+      const m = w.match(/(?:^|[^\d])(0?[1-9]|[12]\d|3[01])(?:[-/\s]|$)/);
+      if (m) {
+        n = Number(m[1]);
+      } else {
+        const m2 = w.match(/(0?[1-9]|[12]\d|3[01])/);
         if (m2) n = Number(m2[1]);
       }
     }
