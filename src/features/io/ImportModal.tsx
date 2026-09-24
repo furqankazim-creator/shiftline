@@ -77,12 +77,84 @@ export function ImportModal({
     }
   };
 
+  /**
+   * Smart defaults for a shift code that appears in the imported Excel but
+   * doesn't yet exist in the app.  The tone/label/timing are inferred from
+   * the code's first letter(s) so the code shows up with the right colour
+   * straight away — the user can fine-tune timings in Setup → Shift codes.
+   */
+  const guessShiftCode = (id: string, existingCount: number) => {
+    const up = id.toUpperCase();
+    type Tone = 'morning' | 'evening' | 'night' | 'general' | 'project' | 'leave' | 'off';
+
+    const KNOWN_LABELS: Record<string, { label: string; timing: string; tone: Tone; rotates: boolean; isStatus?: boolean }> = {
+      M:    { label: 'Morning',           timing: '06:00 – 15:00', tone: 'morning',  rotates: true  },
+      ML:   { label: 'Morning Late',      timing: '07:00 – 18:00', tone: 'morning',  rotates: false },
+      MT:   { label: 'Morning – Support', timing: '06:00 – 15:00', tone: 'morning',  rotates: false },
+      E:    { label: 'Evening',           timing: '14:00 – 23:00', tone: 'evening',  rotates: true  },
+      EL:   { label: 'Evening Late',      timing: '15:00 – 00:00', tone: 'evening',  rotates: false },
+      ET:   { label: 'Evening – Support', timing: '14:00 – 23:00', tone: 'evening',  rotates: false },
+      N:    { label: 'Night',             timing: '22:00 – 07:00', tone: 'night',    rotates: true  },
+      NL:   { label: 'Night Late',        timing: '19:00 – 07:00', tone: 'night',    rotates: false },
+      NT:   { label: 'Night – Support',   timing: '22:00 – 07:00', tone: 'night',    rotates: false },
+      GS:   { label: 'General Shift',     timing: '08:00 – 17:00', tone: 'general',  rotates: false },
+      P:    { label: 'Project',           timing: '08:00 – 17:00', tone: 'project',  rotates: false },
+      LV:   { label: 'Leave',             timing: '',              tone: 'leave',    rotates: false, isStatus: true },
+      FLRT: { label: 'FLRT',             timing: '',              tone: 'leave',    rotates: false, isStatus: true },
+    };
+
+    const defaults = KNOWN_LABELS[up];
+    if (defaults) {
+      return { id: up, ...defaults, minHeadcount: 0, countsAsEngineer: !defaults.isStatus, order: 500 + existingCount };
+    }
+
+    // Infer tone from first letter
+    const tone: Tone = /^M/i.test(up) ? 'morning'
+      : /^E/i.test(up) ? 'evening'
+      : /^N/i.test(up) ? 'night'
+      : /^GS/i.test(up) ? 'general'
+      : /^P/i.test(up) ? 'project'
+      : /^LV|^AL|^SL/i.test(up) ? 'leave'
+      : 'off';
+
+    return {
+      id: up,
+      label: up,
+      timing: '',
+      tone,
+      minHeadcount: 0,
+      countsAsEngineer: false,
+      rotates: false,
+      order: 500 + existingCount,
+    };
+  };
+
   const commit = async () => {
     if (!result) return;
     const { toRecords } = await loadImporter();
     const { employees, leave } = toRecords(result, targetLine, () => newId('e'));
 
-    await db.transaction('rw', db.employees, db.leave, db.rosters, async () => {
+    // ---- collect every shift code used by the imported employees ----------
+    const usedCodes = new Set<string>();
+    for (const emp of result.employees) {
+      for (const code of emp.codes) {
+        if (code && code !== '-' && code !== OFF) usedCodes.add(code);
+      }
+    }
+
+    // ---- find which codes are missing from the current setup --------------
+    const existingIds = new Set(codes.map((c) => c.id));
+    const toCreate = [...usedCodes]
+      .filter((id) => !existingIds.has(id))
+      .map((id, i) => guessShiftCode(id, codes.length + i));
+
+    // ---- write everything in one transaction ------------------------------
+    await db.transaction('rw', db.employees, db.leave, db.rosters, db.codes, async () => {
+      // Auto-create any shift codes that don't exist yet
+      if (toCreate.length) {
+        await db.codes.bulkPut(toCreate as Parameters<typeof db.codes.bulkPut>[0]);
+      }
+
       if (replace) {
         const existing = await db.employees.where('lineId').equals(targetLine).toArray();
         await db.leave.where('employeeId').anyOf(existing.map((e) => e.id)).delete();
@@ -99,6 +171,7 @@ export function ImportModal({
     reset();
     onClose();
   };
+
 
   return (
     <Modal
@@ -221,10 +294,10 @@ export function ImportModal({
           ))}
 
           {result.unknownCodes.length > 0 && (
-            <p className="text-[12px] text-[var(--warn)] leading-snug">
-              Unrecognised codes in this sheet:{' '}
-              <span className="font-mono">{result.unknownCodes.join(', ')}</span>. They will be
-              imported as-is — add them in Setup to give them a colour and timing.
+            <p className="text-[12px] text-[var(--accent)] leading-snug rounded-lg border border-[var(--accent)] px-3 py-2">
+              ✨ New shift codes found:{' '}
+              <span className="font-mono font-bold">{result.unknownCodes.join(', ')}</span>.{' '}
+              They will be <strong>auto-created</strong> with colour and timing defaults when you confirm — you can customise them later in Setup → Shift codes.
             </p>
           )}
 
