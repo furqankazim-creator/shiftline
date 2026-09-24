@@ -281,6 +281,249 @@ export function downloadXlsx(input: ExportInput): string {
   return filename;
 }
 
+// ---------------------------------------------------------------------------
+// Operational format export — mirrors the client's sectioned roster exactly
+// ---------------------------------------------------------------------------
+
+const DOW_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+const MON_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+
+/** "Sat 19-Sep-2026" */
+function opDateHeader(year: number, month: number, day: number): string {
+  const dow = DOW_SHORT[new Date(year, month - 1, day).getDay()];
+  const mon = MON_SHORT[month - 1];
+  return `${dow} ${String(day).padStart(2, '0')}-${mon}-${year}`;
+}
+
+/**
+ * Convert a short shift code back to the verbose operational description
+ * e.g. "Morning Early | 06:00-16:30 | 11H".
+ */
+function opShiftText(code: string, codeById: Map<string, ShiftCode>): string {
+  if (!code || code === '-' || code === OFF) return 'OFF';
+  if (code === 'LV') return 'Annual Leave';
+  if (code === 'FLRT') return 'FLRT';
+
+  const def = codeById.get(code);
+  if (!def) return code;
+
+  const label = def.label ?? code;
+  const timing = def.timing ?? '';
+  if (!timing) return label;
+
+  // Compute duration from "HH:MM – HH:MM" or "HH:MM-HH:MM"
+  const m = timing.match(/(\d{1,2}):(\d{2})\s*[–\-]\s*(\d{1,2}):(\d{2})/);
+  let durStr = '';
+  if (m) {
+    const start = Number(m[1]) * 60 + Number(m[2]);
+    let end = Number(m[3]) * 60 + Number(m[4]);
+    if (end < start) end += 24 * 60; // overnight
+    const dur = (end - start) / 60;
+    durStr = ` | ${Number.isInteger(dur) ? dur : dur.toFixed(1)}H`;
+  }
+  return `${label} | ${timing.replace('–', '-')}${durStr}`;
+}
+
+/** Section palette colours (header / row background / count row). */
+const SECTION_COLORS: Record<string, { header: string; row: string; count: string }> = {
+  'PIC-M':   { header: '00B0F0', row: 'DAEEF3', count: 'FFFF00' },
+  'PIC-E':   { header: '00B0F0', row: 'DAEEF3', count: 'FFFF00' },
+  'PIC-N':   { header: '7030A0', row: 'E4DFEC', count: 'FFFF00' },
+  'MP-M':    { header: 'FF8C00', row: 'FCE4D6', count: 'FFFF00' },
+  'MP-E':    { header: 'FF8C00', row: 'FCE4D6', count: 'FFFF00' },
+  'MP-N':    { header: '7030A0', row: 'E4DFEC', count: 'FFFF00' },
+  'DEFAULT': { header: '4472C4', row: 'DCE6F1', count: 'FFFF00' },
+};
+
+function sectionKey(role: string | undefined, shift: string): string {
+  const r = (role ?? '').toUpperCase();
+  const s = /^M/.test(shift) ? 'M' : /^E/.test(shift) ? 'E' : /^N/.test(shift) ? 'N' : shift;
+  const k = `${r}-${s}`;
+  return k in SECTION_COLORS ? k : 'DEFAULT';
+}
+
+function shiftLabel(shift: string): string {
+  const m: Record<string, string> = { M: 'Morning', E: 'Evening', N: 'Night', GS: 'General', P: 'Project' };
+  return m[shift.charAt(0)] ?? shift;
+}
+
+type OCell = XLSX.CellObject & { s?: Record<string, unknown> };
+
+function oc(v: unknown, t: XLSX.ExcelDataType, style?: Record<string, unknown>): OCell {
+  return { v, t, s: style } as OCell;
+}
+
+function mkHeaderStyle(rgb: string): Record<string, unknown> {
+  return {
+    fill: { fgColor: { rgb }, patternType: 'solid' },
+    font: { bold: true, color: { rgb: 'FFFFFFFF' }, sz: 10 },
+    alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+    border: BORDER,
+  };
+}
+
+function mkCellStyle(rgb: string, bold = false, align = 'center'): Record<string, unknown> {
+  return {
+    fill: { fgColor: { rgb }, patternType: 'solid' },
+    font: { bold, sz: 9 },
+    alignment: { horizontal: align, vertical: 'center', wrapText: true },
+    border: BORDER,
+  };
+}
+
+/**
+ * Builds an Excel workbook that reproduces the client's operational format:
+ *
+ *   Row 1 : title
+ *   Row 2 : column headers (Employee | Role | Shift | Total OT | Sat 01-Sep … )
+ *   Then employee rows grouped into sections (PIC Morning, MP Morning, …)
+ *   with a headcount row after each section.
+ */
+export function buildOperationalWorkbook({ roster, employees, codes, line }: ExportInput): XLSX.WorkBook {
+  const { year, month } = roster;
+  const nDays = daysInMonth(year, month);
+  const codeById = new Map(codes.map((c) => [c.id, c]));
+
+  // ---- group employees into ordered sections -----------------------------
+  const sectionOrder: string[] = [];
+  const sections = new Map<string, Employee[]>();
+  for (const emp of employees) {
+    const key = sectionKey(emp.role, emp.defaultShift);
+    if (!sections.has(key)) { sections.set(key, []); sectionOrder.push(key); }
+    sections.get(key)!.push(emp);
+  }
+
+  // ---- build the sheet cell by cell -------------------------------------
+  const ws: XLSX.WorkSheet = {};
+  const merges: XLSX.Range[] = [];
+  let rowIdx = 0;
+
+  const nCols = 4 + nDays;
+
+  const set = (r: number, c: number, cell: OCell) => { ws[XLSX.utils.encode_cell({ r, c })] = cell; };
+
+  // Row 0: title
+  const MONTH_NAMES_LONG = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const titleText = `${MONTH_NAMES_LONG[month - 1].toUpperCase()} ${year} RST ${line.prefix ?? ''} ${line.name} | BORDERED OPERATIONAL ROSTER`;
+  set(rowIdx, 0, oc(titleText, 's', { font: { bold: true, sz: 12 }, alignment: { horizontal: 'left' } }));
+  merges.push({ s: { r: rowIdx, c: 0 }, e: { r: rowIdx, c: nCols - 1 } });
+  rowIdx++;
+
+  // Row 1: column headers
+  const hdrStyle = mkHeaderStyle('1F3864');
+  set(rowIdx, 0, oc('Employee', 's', hdrStyle));
+  set(rowIdx, 1, oc('Role', 's', hdrStyle));
+  set(rowIdx, 2, oc('Shift', 's', hdrStyle));
+  set(rowIdx, 3, oc('Total OT', 's', hdrStyle));
+  for (let d = 1; d <= nDays; d++) {
+    set(rowIdx, 3 + d, oc(opDateHeader(year, month, d), 's', mkHeaderStyle('2E4057')));
+  }
+  rowIdx++;
+
+  // Section rows
+  for (const key of sectionOrder) {
+    const emps = sections.get(key)!;
+    const colors = SECTION_COLORS[key] ?? SECTION_COLORS['DEFAULT'];
+    const firstEmp = emps[0];
+    const sRole  = (firstEmp.role ?? '').toUpperCase() || 'STAFF';
+    const sShift = shiftLabel(firstEmp.defaultShift);
+
+    // Section header
+    const shStyle = mkHeaderStyle(colors.header);
+    set(rowIdx, 0, oc(`${sRole} ${sShift} shift`, 's', shStyle));
+    for (let c = 1; c < nCols; c++) set(rowIdx, c, oc('', 's', shStyle));
+    merges.push({ s: { r: rowIdx, c: 0 }, e: { r: rowIdx, c: nCols - 1 } });
+    rowIdx++;
+
+    // Employee rows
+    for (const emp of emps) {
+      const cells = roster.cells[emp.id] ?? [];
+      const overrides = (roster.overrides?.[emp.id] ?? {}) as Record<number, string>;
+      const rowBg = colors.row;
+
+      set(rowIdx, 0, oc(emp.name, 's', mkCellStyle(rowBg, true, 'left')));
+      set(rowIdx, 1, oc(emp.role ?? '', 's', mkCellStyle(rowBg, false, 'center')));
+      set(rowIdx, 2, oc(shiftLabel(emp.defaultShift), 's', mkCellStyle(rowBg, false, 'center')));
+
+      let workedHours = 0;
+      for (let d = 0; d < nDays; d++) {
+        const code = overrides[d] ?? cells[d]?.code ?? OFF;
+        const isOff = code === OFF || code === '-';
+        const isLeave = code === 'LV' || code === 'FLRT';
+        const cellText = opShiftText(code, codeById);
+        const bg = isOff ? 'FFFFFF' : isLeave ? 'FFE6E6' : rowBg;
+        set(rowIdx, 4 + d, oc(cellText, 's', mkCellStyle(bg, false, 'center')));
+
+        if (!isOff && !isLeave) {
+          const def = codeById.get(code);
+          const timing = def?.timing ?? '';
+          const tm = timing.match(/(\d{1,2}):(\d{2})\s*[–\-]\s*(\d{1,2}):(\d{2})/);
+          if (tm) {
+            const s2 = Number(tm[1]) * 60 + Number(tm[2]);
+            let e2 = Number(tm[3]) * 60 + Number(tm[4]);
+            if (e2 < s2) e2 += 24 * 60;
+            workedHours += (e2 - s2) / 60;
+          } else {
+            workedHours += 11;
+          }
+        }
+      }
+      set(rowIdx, 3, oc(Math.round(workedHours), 'n', mkCellStyle(rowBg, false, 'center')));
+      rowIdx++;
+    }
+
+    // Count row
+    const countBg = colors.count;
+    set(rowIdx, 0, oc(`${sRole} ${sShift} working count`, 's', mkCellStyle(countBg, true, 'left')));
+    for (let c = 1; c < 4; c++) set(rowIdx, c, oc('', 's', mkCellStyle(countBg)));
+    for (let d = 0; d < nDays; d++) {
+      const count = emps.filter((emp) => {
+        const cells = roster.cells[emp.id] ?? [];
+        const overrides = (roster.overrides?.[emp.id] ?? {}) as Record<number, string>;
+        const code = overrides[d] ?? cells[d]?.code ?? OFF;
+        return code !== OFF && code !== '-' && code !== 'LV' && code !== 'FLRT';
+      }).length;
+      set(rowIdx, 4 + d, oc(count > 0 ? count : '', count > 0 ? 'n' : 's', mkCellStyle(countBg, true, 'center')));
+    }
+    rowIdx++;
+    rowIdx++; // blank separator
+  }
+
+  ws['!merges'] = merges;
+  ws['!cols'] = [
+    { wch: 26 },
+    { wch: 6  },
+    { wch: 9  },
+    { wch: 8  },
+    ...Array.from({ length: nDays }, () => ({ wch: 22 })),
+  ];
+  ws['!rows'] = [{ hpt: 20 }, { hpt: 40 }];
+  ws['!ref'] = `A1:${colLetter(nCols - 1)}${rowIdx}`;
+
+  const wb = XLSX.utils.book_new();
+  const sheetName = `${line.prefix ?? line.name}_${MONTH_ABBR[month - 1]}-${year}`.slice(0, 31);
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  return wb;
+}
+
+/** Download the operational-format Excel for the active roster. */
+export function downloadOperationalXlsx(input: ExportInput): string {
+  const wb = buildOperationalWorkbook(input);
+  const { line, roster } = input;
+  const filename = `${MONTH_ABBR[roster.month - 1]}_${roster.year}_RST_${(line.prefix ?? line.name).replace(/\s+/g, '_')}_ROSTER.xlsx`;
+  const bytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx', cellStyles: true });
+  const blob = new Blob([bytes], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return filename;
+}
+
 export interface BackupData {
   lines: Line[];
   employees: Employee[];

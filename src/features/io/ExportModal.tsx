@@ -12,8 +12,20 @@ export function ExportModal({ open, onClose }: { open: boolean; onClose: () => v
 
   const options = [
     {
+      key: 'operational',
+      title: 'Operational Roster (same format as imported)',
+      body: 'Exports in the exact same format as the client\'s operational Excel — sections by Role & Shift (PIC Morning, MP Night…), date headers, verbose shift timings, and count rows.',
+      action: async () => {
+        if (!roster || !line) return;
+        const { downloadOperationalXlsx } = await import('@/io/exportXlsx');
+        const filename = downloadOperationalXlsx({ roster, employees, codes, line });
+        toast(`Saved ${filename}`, 'ok');
+        onClose();
+      },
+    },
+    {
       key: 'xlsx',
-      title: 'Excel workbook',
+      title: 'Standard Excel workbook',
       body: 'Your layout, with colour-filled shift codes and live COUNTIF headcount rows — the file you send to management.',
       action: async () => {
         if (!roster || !line) return;

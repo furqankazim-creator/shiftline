@@ -84,6 +84,8 @@ export interface Employee {
   lineId: string;
   name: string;
   contact: string;
+  /** Operational role, e.g. "PIC", "MP", "CM" — populated when importing an operational roster. */
+  role?: string;
   /** Row order in the grid. The client groups his sheet by shift. */
   order: number;
   /** Shift used on any working day not covered by a rotation rule. */

@@ -7,6 +7,8 @@ import { OFF, type Employee, type LeaveBlock, type Line, type RosterMonth, type 
 export interface ImportedEmployee {
   name: string;
   contact: string;
+  /** Operational role (e.g. "PIC", "MP") detected when the adjacent column holds a role code. */
+  role?: string;
   codes: string[];
   restDays: Weekday[];
   defaultShift: string;
@@ -243,12 +245,24 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
     const defaultShift = inferDefaultShift(codes, workedSet, 'GS');
     const rotations = inferRotations(codes, workedSet);
 
-    // Pick contact or role from adjacent column
-    const contactOrRole = text(r, nameCol + 1);
+    // Detect whether column nameCol+1 is a role identifier (PIC, MP, CM, …)
+    // or a phone contact number. If it's a role, also peek at nameCol+2 for a
+    // possible contact number (operational roster has: Name | Role | Shift | OT | …).
+    const col1Val = text(r, nameCol + 1);
+    const ROLE_CODES = /^(PIC|MP|CM|UFWL|GS|SV|TL|OP|TEC|ENG|SUP|ADM)$/i;
+    let role: string | undefined;
+    let contact = '';
+    if (ROLE_CODES.test(col1Val)) {
+      role = col1Val.toUpperCase();
+      // contact might be in a later column — skip for now (OT cols are numbers)
+    } else {
+      contact = col1Val;
+    }
 
     employees.push({
       name: rowName,
-      contact: contactOrRole,
+      contact,
+      role,
       codes,
       restDays,
       defaultShift,
@@ -326,6 +340,7 @@ export function toRecords(
       lineId,
       name: row.name,
       contact: row.contact,
+      role: row.role,
       order: i + 1,
       defaultShift: row.defaultShift,
       restDays: row.restDays,
