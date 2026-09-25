@@ -6,7 +6,7 @@ import { useViewport } from '@/app/useViewport';
 import { toneVars } from '@/app/tones';
 import { Button, Select, cx, useToast } from '@/components/ui';
 import { MONTH_NAMES } from '@/domain/calendar';
-import { OFF } from '@/domain/types';
+import { OFF, type ShiftTone } from '@/domain/types';
 
 interface Props {
   brush: string | null;
@@ -23,10 +23,16 @@ export function Toolbar({
   brush, setBrush, onGenerate, onRotate, onImport, onExport, insightsOpen, toggleInsights,
 }: Props) {
   const {
-    settings, lines, codes, setLine, setMonth, stepMonth, issues, undo, redo,
+    settings, lines, codes, allCodes, enableCode, setLine, setMonth, stepMonth, issues, undo, redo,
     updateSettings, saveStatus, saveRoster,
   } = useStore();
+  const [addCodeOpen, setAddCodeOpen] = useState(false);
   const toast = useToast();
+  // Codes that exist but this month does not use yet — offered behind "＋".
+  const shown = new Set(codes.map((c) => c.id));
+  const availableToAdd = allCodes
+    .filter((c) => !c.scope && !shown.has(c.id))
+    .sort((a, b) => a.order - b.order);
   const errors = issues.filter((i) => i.severity === 'error').length;
   const warnings = issues.length - errors;
   const viewport = useViewport();
@@ -360,6 +366,17 @@ export function Toolbar({
           tone={toneVars('off')}
         />
 
+        <AddCodeChip
+          open={addCodeOpen}
+          setOpen={setAddCodeOpen}
+          available={availableToAdd}
+          onPick={async (id) => {
+            await enableCode(id);
+            setBrush(id);
+            setAddCodeOpen(false);
+          }}
+        />
+
         {brush && (
           <motion.span
             initial={{ opacity: 0, x: -4 }}
@@ -370,6 +387,74 @@ export function Toolbar({
           </motion.span>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * "＋" at the end of the brush: the codes this month does not use yet.
+ *
+ * The brush deliberately lists only what the sheet actually works with, so
+ * this is how a code gets added to a month without appearing on every other
+ * month's brush.
+ */
+function AddCodeChip({
+  open, setOpen, available, onPick,
+}: {
+  open: boolean;
+  setOpen: (v: boolean) => void;
+  available: { id: string; label: string; timing: string; tone: ShiftTone; isStatus?: boolean }[];
+  onPick: (id: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [open, setOpen]);
+
+  if (available.length === 0) return null;
+
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        onClick={() => setOpen(!open)}
+        title="Add another shift code to this month's brush"
+        className="h-7 min-w-[34px] px-2 rounded-md border border-dashed border-[var(--line-strong)] text-[12px] font-medium text-ink-3 hover:text-ink hover:border-[var(--accent)] transition-colors"
+      >
+        ＋
+      </button>
+      {open && (
+        <div className="absolute left-0 top-9 z-50 w-60 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-1.5 shadow-pop">
+          <p className="px-2 py-1 text-[10.5px] uppercase tracking-wider text-ink-3">
+            Add to this month only
+          </p>
+          <div className="max-h-64 overflow-y-auto">
+            {available.map((c) => {
+              const tone = toneVars(c.tone);
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => onPick(c.id)}
+                  className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-[var(--surface-2)] transition-colors"
+                >
+                  <span
+                    className={cx('rounded px-1.5 py-0.5 font-mono text-[11px] font-bold', c.isStatus && 'hatch')}
+                    style={{ background: c.isStatus ? undefined : tone.bg, color: tone.fg }}
+                  >
+                    {c.id}
+                  </span>
+                  <span className="text-[12px] truncate">{c.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

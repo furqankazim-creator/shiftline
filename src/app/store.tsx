@@ -11,6 +11,7 @@ import {
 } from '@/domain/generator';
 import { autoRotate, buildHistory, fairness, type AutoRotateResult } from '@/domain/rotation';
 import { summarise } from '@/domain/summary';
+import { OFF } from '@/domain/types';
 import type {
   Employee, Issue, LeaveBlock, Line, RosterMonth, ShiftCode,
 } from '@/domain/types';
@@ -23,6 +24,8 @@ interface RosterStore {
   codes: ShiftCode[];
   /** Every code in the database, including ones scoped to other months. */
   allCodes: ShiftCode[];
+  /** Adds a code to this month's brush without touching any other month. */
+  enableCode(codeId: string): Promise<void>;
   employees: Employee[];
   leave: LeaveBlock[];
   roster: RosterMonth | null;
@@ -116,12 +119,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const id = rosterId(activeLineId, activeYear, activeMonth);
 
   /**
-   * The codes the brush and validator see: the standard set, plus the ones an
-   * import invented for exactly this month. A code that came in on one sheet
-   * stays on that sheet.
+   * The codes this month actually works with — what the brush offers, what the
+   * headcount legend lists, and what the validator enforces minimums for.
+   *
+   * A sheet uses the codes that appear in its own grid, plus any an import
+   * invented for it, plus any deliberately added here. Nothing else: a
+   * Morning/Night operation should not be told every day that "nobody is on
+   * Evening" because some other line runs an Evening shift.
    */
-  const codes = useMemo(
-    () => allCodes.filter((c) => !c.scope || c.scope === id).sort((a, b) => a.order - b.order),
+  const codes = useMemo(() => {
+    const used = new Set<string>();
+    if (roster) {
+      for (const row of Object.values(roster.cells)) {
+        for (const cell of row) if (cell.code && cell.code !== OFF) used.add(cell.code);
+      }
+    }
+    return allCodes
+      .filter((c) => c.scope === id || (!c.scope && used.has(c.id)))
+      .sort((a, b) => a.order - b.order);
+  }, [allCodes, roster, id]);
+
+  /**
+   * Brings a code the month does not yet use onto its brush, by giving this
+   * month its own copy. It stays on this month only.
+   */
+  const enableCode = useCallback(
+    async (codeId: string) => {
+      const source = allCodes.find((c) => c.id === codeId && !c.scope)
+        ?? allCodes.find((c) => c.id === codeId);
+      if (!source) return;
+      const { key: _drop, ...rest } = source as typeof source & { key?: string };
+      await db.shiftCodes.put({ ...rest, scope: id, key: codeKey(codeId, id) });
+    },
     [allCodes, id],
   );
 
@@ -429,6 +458,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     lines,
     codes,
     allCodes,
+    enableCode,
     employees,
     leave: lineLeave,
     roster,
