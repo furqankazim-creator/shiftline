@@ -15,18 +15,18 @@ describe('shift codes scoped to an imported month', () => {
 
   /** What the planner shows for a given month. */
   const brushFor = async (rosterId: string) =>
-    (await db.codes.toArray())
+    (await db.shiftCodes.toArray())
       .filter((c) => !c.scope || c.scope === rosterId)
       .map((c) => c.id)
       .sort();
 
   beforeEach(async () => {
-    await db.codes.clear();
-    await db.codes.bulkPut(SEED_CODES.map((c) => ({ ...c, key: codeKey(c.id) })));
+    await db.shiftCodes.clear();
+    await db.shiftCodes.bulkPut(SEED_CODES.map((c) => ({ ...c, key: codeKey(c.id) })));
   });
 
   it('keeps an imported code off other months', async () => {
-    await db.codes.put({
+    await db.shiftCodes.put({
       id: 'H', label: 'Holiday', timing: '', tone: 'off', minHeadcount: 0,
       countsAsEngineer: false, rotates: false, order: 500, scope: SEPT,
       key: codeKey('H', SEPT),
@@ -37,13 +37,13 @@ describe('shift codes scoped to an imported month', () => {
   });
 
   it('lets two sheets each define the same token differently', async () => {
-    await db.codes.bulkPut([
+    await db.shiftCodes.bulkPut([
       { id: 'H', label: 'Holiday', timing: '', tone: 'off', minHeadcount: 0, countsAsEngineer: false, rotates: false, order: 500, scope: SEPT, key: codeKey('H', SEPT) },
       { id: 'H', label: 'Half day', timing: '08:00 – 12:00', tone: 'general', minHeadcount: 0, countsAsEngineer: true, rotates: false, order: 500, scope: OCT, key: codeKey('H', OCT) },
     ]);
 
-    expect((await db.codes.get(codeKey('H', SEPT)))?.label).toBe('Holiday');
-    expect((await db.codes.get(codeKey('H', OCT)))?.label).toBe('Half day');
+    expect((await db.shiftCodes.get(codeKey('H', SEPT)))?.label).toBe('Holiday');
+    expect((await db.shiftCodes.get(codeKey('H', OCT)))?.label).toBe('Half day');
   });
 
   it('leaves the standard codes visible on every month', async () => {
@@ -53,13 +53,13 @@ describe('shift codes scoped to an imported month', () => {
   });
 
   it('deletes only the scoped copy, not the global one', async () => {
-    await db.codes.put({
+    await db.shiftCodes.put({
       id: 'GS', label: 'Site override', timing: '', tone: 'general', minHeadcount: 0,
       countsAsEngineer: true, rotates: false, order: 501, scope: SEPT, key: codeKey('GS', SEPT),
     });
-    await db.codes.delete(codeKey('GS', SEPT));
+    await db.shiftCodes.delete(codeKey('GS', SEPT));
 
-    expect(await db.codes.get(codeKey('GS'))).toBeDefined();
+    expect(await db.shiftCodes.get(codeKey('GS'))).toBeDefined();
     expect(await brushFor(SEPT)).toContain('GS');
   });
 });

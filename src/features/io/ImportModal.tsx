@@ -152,10 +152,10 @@ export function ImportModal({
       .map((id, i) => ({ ...guessShiftCode(id, codes.length + i), scope }));
 
     // ---- write everything in one transaction ------------------------------
-    await db.transaction('rw', db.employees, db.leave, db.rosters, db.codes, db.layouts, async () => {
+    await db.transaction('rw', db.employees, db.leave, db.rosters, db.shiftCodes, db.layouts, async () => {
       // Auto-create any shift codes that don't exist yet
       if (toCreate.length) {
-        await db.codes.bulkPut(toCreate.map((c) => ({ ...c, key: codeKey(c.id, c.scope) })));
+        await db.shiftCodes.bulkPut(toCreate.map((c) => ({ ...c, key: codeKey(c.id, c.scope) })));
       }
 
       if (replace) {

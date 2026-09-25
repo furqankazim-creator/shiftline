@@ -69,7 +69,13 @@ export type StoredShiftCode = ShiftCode & { key: string };
 class RosterDB extends Dexie {
   lines!: EntityTable<Line, 'id'>;
   employees!: EntityTable<Employee, 'id'>;
-  codes!: EntityTable<StoredShiftCode, 'key'>;
+  /**
+   * Named `shiftCodes` rather than `codes` because the primary key changed
+   * from the bare token to (scope, token), and IndexedDB cannot re-key a
+   * store in place — the rows are copied into this table and the old one is
+   * dropped. See v3/v4 below.
+   */
+  shiftCodes!: EntityTable<StoredShiftCode, 'key'>;
   leave!: EntityTable<LeaveBlock, 'id'>;
   rosters!: EntityTable<RosterMonth, 'id'>;
   settings!: EntityTable<Settings, 'key'>;
@@ -102,21 +108,27 @@ class RosterDB extends Dexie {
       }
     });
 
-    // v3: codes are keyed by (scope, id) so an imported sheet can own a code
-    // token without it appearing on every other month's brush. Existing codes
-    // have no scope, so they stay global — nothing disappears on upgrade.
+    // v3: codes become keyed by (scope, id), so an imported sheet can own a
+    // code token without it appearing on every other month's brush.
+    //
+    // IndexedDB cannot change a store's primary key, so the rows are copied
+    // into a new `shiftCodes` store here and the old `codes` store is dropped
+    // in v4. Existing codes have no scope, so they stay global — nothing
+    // disappears on upgrade.
     this.version(3).stores({
-      codes: 'key, id, scope, order',
+      shiftCodes: 'key, id, scope, order',
     }).upgrade(async (tx) => {
-      const codesTable = tx.table('codes');
-      const all = await codesTable.toArray();
-      await codesTable.clear();
-      await codesTable.bulkPut(all.map((c) => ({ ...c, key: codeKey(c.id, c.scope) })));
+      const old = await tx.table('codes').toArray();
+      if (old.length) {
+        await tx.table('shiftCodes').bulkPut(
+          old.map((c) => ({ ...c, key: codeKey(c.id, c.scope) })),
+        );
+      }
     });
 
-    // v4: remember the layout of an imported workbook so Export can write the
-    // month back in that same shape.
-    this.version(4).stores({ layouts: 'rosterId' });
+    // v4: drop the re-keyed store, and remember the layout of an imported
+    // workbook so Export can write the month back in that same shape.
+    this.version(4).stores({ codes: null, layouts: 'rosterId' });
   }
 }
 
@@ -133,9 +145,9 @@ export async function ensureSeeded(): Promise<void> {
   const existing = await db.settings.get('app');
   if (existing?.seeded) return;
 
-  await db.transaction('rw', db.lines, db.employees, db.codes, db.leave, db.settings, async () => {
+  await db.transaction('rw', db.lines, db.employees, db.shiftCodes, db.leave, db.settings, async () => {
     await db.lines.bulkPut(SEED_LINES);
-    await db.codes.bulkPut(SEED_CODES.map((c) => ({ ...c, key: codeKey(c.id) })));
+    await db.shiftCodes.bulkPut(SEED_CODES.map((c) => ({ ...c, key: codeKey(c.id) })));
     await db.employees.bulkPut(SEED_EMPLOYEES);
     await db.leave.bulkPut(SEED_LEAVE);
     await db.settings.put({ ...DEFAULT_SETTINGS, ...existing, key: 'app', seeded: true });
@@ -155,7 +167,7 @@ export async function getFullBackupData() {
   const [lines, employees, codes, leave, rosters, settings] = await Promise.all([
     db.lines.toArray(),
     db.employees.toArray(),
-    db.codes.toArray(),
+    db.shiftCodes.toArray(),
     db.leave.toArray(),
     db.rosters.toArray(),
     getSettings(),
@@ -179,15 +191,15 @@ export async function importBackupData(data: any): Promise<void> {
   }
   await db.transaction(
     'rw',
-    [db.lines, db.employees, db.codes, db.leave, db.rosters, db.settings],
+    [db.lines, db.employees, db.shiftCodes, db.leave, db.rosters, db.settings],
     async () => {
       await Promise.all([
-        db.lines.clear(), db.employees.clear(), db.codes.clear(),
+        db.lines.clear(), db.employees.clear(), db.shiftCodes.clear(),
         db.leave.clear(), db.rosters.clear(),
       ]);
       await db.lines.bulkPut(data.lines?.length ? data.lines : SEED_LINES);
       const restoredCodes: ShiftCode[] = data.codes?.length ? data.codes : SEED_CODES;
-      await db.codes.bulkPut(restoredCodes.map((c) => ({ ...c, key: codeKey(c.id, c.scope) })));
+      await db.shiftCodes.bulkPut(restoredCodes.map((c) => ({ ...c, key: codeKey(c.id, c.scope) })));
       await db.employees.bulkPut(data.employees);
       await db.leave.bulkPut(data.leave ?? []);
       await db.rosters.bulkPut(data.rosters ?? []);
@@ -210,10 +222,10 @@ export async function importBackup(json: string): Promise<void> {
 export async function resetToSeed(): Promise<void> {
   await db.transaction(
     'rw',
-    [db.lines, db.employees, db.codes, db.leave, db.rosters, db.settings],
+    [db.lines, db.employees, db.shiftCodes, db.leave, db.rosters, db.settings],
     async () => {
       await Promise.all([
-        db.lines.clear(), db.employees.clear(), db.codes.clear(),
+        db.lines.clear(), db.employees.clear(), db.shiftCodes.clear(),
         db.leave.clear(), db.rosters.clear(), db.settings.clear(),
       ]);
     },

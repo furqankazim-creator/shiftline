@@ -87,7 +87,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [rawSettings],
   );
   const lines = useLiveQuery(() => db.lines.orderBy('order').toArray(), [], []) ?? [];
-  const allCodes = useLiveQuery(() => db.codes.orderBy('order').toArray(), [], []) ?? [];
+  const allCodes = useLiveQuery(() => db.shiftCodes.orderBy('order').toArray(), [], []) ?? [];
   const leave = useLiveQuery(() => db.leave.toArray(), [], []) ?? [];
 
   const { activeLineId, activeYear, activeMonth } = settings;
@@ -396,11 +396,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveCode = useCallback(async (code: ShiftCode) => {
-    await db.codes.put({ ...code, key: codeKey(code.id, code.scope) });
+    await db.shiftCodes.put({ ...code, key: codeKey(code.id, code.scope) });
   }, []);
 
   const removeCode = useCallback(async (codeId: string, scope?: string) => {
-    await db.codes.delete(codeKey(codeId, scope));
+    await db.shiftCodes.delete(codeKey(codeId, scope));
   }, []);
 
   const saveLine = useCallback(async (line: Line) => {
