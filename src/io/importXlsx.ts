@@ -2,7 +2,7 @@ import XLSX from 'xlsx-js-style';
 
 import { MONTH_ABBR, daysInMonth } from '@/domain/calendar';
 import { inferDefaultShift, inferRestDays, inferRotations } from '@/domain/generator';
-import { OFF, type Employee, type LeaveBlock, type Line, type RosterMonth, type RotationRule, type ShiftCode, type Weekday } from '@/domain/types';
+import { OFF, type Employee, type LeaveBlock, type Line, type RosterMonth, type RotationRule, type SheetLayout, type ShiftCode, type Weekday } from '@/domain/types';
 
 export interface ImportedEmployee {
   name: string;
@@ -25,6 +25,8 @@ export interface ImportResult {
   /** Codes seen in the sheet that the app doesn't know about yet. */
   unknownCodes: string[];
   warnings: string[];
+  /** The source file's shape, for round-tripping on export. */
+  layout: SheetLayout;
 }
 
 const KNOWN_WORKED = ['M', 'E', 'N', 'GS', 'P', 'MT', 'ET', 'NT', 'ML', 'EL', 'NL'];
@@ -158,7 +160,7 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
   // ---- day columns: numeric headers on the header row ------------------
   // Start scanning after nameCol+1 (Name + Contact columns) so those cols
   // are never misread as day numbers even if they contain small integers.
-  const dayCols: { day: number; col: number }[] = [];
+  const dayCols: { day: number; col: number; header: string }[] = [];
   for (let c = nameCol + 2; c <= range.e.c; c++) {
     const cell = at(headerRow, c);
     const v = cell?.v;
@@ -185,7 +187,7 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
     }
 
     if (Number.isInteger(n) && n >= 1 && n <= 31) {
-      if (!dayCols.some((d) => d.day === n)) dayCols.push({ day: n, col: c });
+      if (!dayCols.some((d) => d.day === n)) dayCols.push({ day: n, col: c, header: w });
     }
   }
   dayCols.sort((a, b) => a.day - b.day);
@@ -196,6 +198,23 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
       `Found ${dayCols.length} day columns but ${MONTH_ABBR[month - 1]} ${year} has ${expected} days.`,
     );
   }
+
+  // ---- remember the source layout for export ---------------------------
+  const dayColSet = new Set(dayCols.map((d) => d.col));
+  const preamble: SheetLayout['preamble'] = [];
+  for (let r = range.s.r; r < headerRow; r++) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const v = at(r, c)?.v;
+      if (v !== undefined && v !== null && String(v).trim() !== '') {
+        preamble.push({ r, c, value: v as string | number });
+      }
+    }
+  }
+  const otherCols: SheetLayout['otherCols'] = [];
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    if (!dayColSet.has(c)) otherCols.push({ col: c, header: text(headerRow, c) });
+  }
+  const extraByName: SheetLayout['extraByName'] = {};
 
   // ---- employee rows ---------------------------------------------------
   const employees: ImportedEmployee[] = [];
@@ -259,6 +278,14 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
       contact = col1Val;
     }
 
+    // Keep this row's non-day cells (role, OT hours, remarks …) verbatim.
+    const extras: Record<number, string | number> = {};
+    for (const { col } of otherCols) {
+      const v = at(r, col)?.v;
+      if (v !== undefined && v !== null && String(v).trim() !== '') extras[col] = v as string | number;
+    }
+    extraByName[rowName] = extras;
+
     employees.push({
       name: rowName,
       contact,
@@ -281,6 +308,7 @@ export function importSheet(buffer: ArrayBuffer, sheetName?: string): ImportResu
     employees,
     unknownCodes: [...unknown],
     warnings,
+    layout: { sheetName: name, headerRow, nameCol, preamble, otherCols, extraByName, dayCols },
   };
 }
 

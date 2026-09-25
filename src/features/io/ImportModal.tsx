@@ -152,7 +152,7 @@ export function ImportModal({
       .map((id, i) => ({ ...guessShiftCode(id, codes.length + i), scope }));
 
     // ---- write everything in one transaction ------------------------------
-    await db.transaction('rw', db.employees, db.leave, db.rosters, db.codes, async () => {
+    await db.transaction('rw', db.employees, db.leave, db.rosters, db.codes, db.layouts, async () => {
       // Auto-create any shift codes that don't exist yet
       if (toCreate.length) {
         await db.codes.bulkPut(toCreate.map((c) => ({ ...c, key: codeKey(c.id, c.scope) })));
@@ -166,7 +166,9 @@ export function ImportModal({
       await db.employees.bulkPut(employees);
       await db.leave.bulkPut(leave);
       // Drop the cached grid so it rebuilds from the imported rules.
-      await db.rosters.delete(rosterId(targetLine, result.year, result.month));
+      await db.rosters.delete(scope);
+      // Remember the source file's shape so Export can hand it back the same way.
+      await db.layouts.put({ rosterId: scope, layout: result.layout });
     });
 
     setMonth(result.year, result.month);

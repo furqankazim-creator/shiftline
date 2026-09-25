@@ -1,6 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie';
 
-import type { Employee, LeaveBlock, Line, RosterMonth, ShiftCode } from '@/domain/types';
+import type { Employee, LeaveBlock, Line, RosterMonth, SheetLayout, ShiftCode } from '@/domain/types';
 import { SEED_CODES, SEED_EMPLOYEES, SEED_LEAVE, SEED_LINES } from './seed';
 
 export type FontSize = 'xs' | 'compact' | 'normal' | 'large' | 'xl';
@@ -57,6 +57,12 @@ export function codeKey(id: string, scope?: string): string {
   return `${scope ?? '*'}::${id}`;
 }
 
+/** An imported sheet's layout, keyed by the roster it belongs to. */
+export interface StoredLayout {
+  rosterId: string;
+  layout: SheetLayout;
+}
+
 /** A ShiftCode as stored: the surrogate primary key is added on write. */
 export type StoredShiftCode = ShiftCode & { key: string };
 
@@ -67,6 +73,8 @@ class RosterDB extends Dexie {
   leave!: EntityTable<LeaveBlock, 'id'>;
   rosters!: EntityTable<RosterMonth, 'id'>;
   settings!: EntityTable<Settings, 'key'>;
+  /** Source-file shape per roster, so Export can mirror an imported template. */
+  layouts!: EntityTable<StoredLayout, 'rosterId'>;
 
   constructor() {
     super('shiftline');
@@ -105,6 +113,10 @@ class RosterDB extends Dexie {
       await codesTable.clear();
       await codesTable.bulkPut(all.map((c) => ({ ...c, key: codeKey(c.id, c.scope) })));
     });
+
+    // v4: remember the layout of an imported workbook so Export can write the
+    // month back in that same shape.
+    this.version(4).stores({ layouts: 'rosterId' });
   }
 }
 

@@ -2,7 +2,7 @@ import XLSX from 'xlsx-js-style';
 
 import { EXPORT_COLORS } from '@/app/tones';
 import { MONTH_ABBR, buildColumns, daysInMonth } from '@/domain/calendar';
-import { OFF, type Employee, type Line, type RosterMonth, type ShiftCode } from '@/domain/types';
+import { OFF, type Employee, type Line, type RosterMonth, type SheetLayout, type ShiftCode } from '@/domain/types';
 
 type Cell = XLSX.CellObject & { s?: Record<string, unknown> };
 
@@ -678,3 +678,116 @@ export function downloadBackupXlsx(data: BackupData, active?: ActiveRosterHint):
   return filename;
 }
 
+
+/* ------------------------------------------------ original-template export */
+
+/**
+ * Writes the month back into the layout of the workbook it was imported from.
+ *
+ * The supervisor's template is what management already reads, so a round-trip
+ * should hand it back unchanged in shape: the same title banner, the header
+ * row in the same place, their own extra columns (role, OT, remarks) carried
+ * through verbatim, and the day headers spelled exactly as they spelled them.
+ * Only the shift letters inside the grid are ours, coloured by code.
+ */
+export function buildFromLayout(
+  { roster, employees, codes }: Omit<ExportInput, 'line'>,
+  layout: SheetLayout,
+): XLSX.WorkBook {
+  const nDays = daysInMonth(roster.year, roster.month);
+  const byId = new Map(codes.map((c) => [c.id, c]));
+  const sheet: Record<string, Cell | unknown> = {};
+  let maxRow = layout.headerRow;
+  let maxCol = layout.nameCol;
+
+  const put = (r: number, c: number, cell: Cell) => {
+    sheet[XLSX.utils.encode_cell({ r, c })] = cell;
+    if (r > maxRow) maxRow = r;
+    if (c > maxCol) maxCol = c;
+  };
+
+  // Title banner and anything else above the header row, exactly as it was.
+  for (const { r, c, value } of layout.preamble) {
+    put(r, c, typeof value === 'number'
+      ? { t: 'n', v: value, s: { font: { bold: r === 0, sz: r === 0 ? 13 : 11 } } }
+      : { t: 's', v: String(value), s: { font: { bold: r === 0, sz: r === 0 ? 13 : 11 } } });
+  }
+
+  const headStyle = {
+    font: { bold: true, sz: 10 },
+    alignment: { horizontal: 'center', vertical: 'center' },
+    border: BORDER,
+  };
+
+  // Header row: their column titles, their day-header spelling.
+  for (const { col, header } of layout.otherCols) {
+    put(layout.headerRow, col, { t: 's', v: header, s: { ...headStyle, alignment: { horizontal: 'left' } } });
+  }
+  for (const { col, header } of layout.dayCols) {
+    put(layout.headerRow, col, { t: 's', v: header, s: headStyle });
+  }
+
+  // One row per employee, in the app's current order.
+  employees.forEach((emp, i) => {
+    const r = layout.headerRow + 1 + i;
+    const extras = layout.extraByName[emp.name] ?? {};
+
+    put(r, layout.nameCol, {
+      t: 's', v: emp.name,
+      s: { font: { sz: 10 }, alignment: { horizontal: 'left' }, border: BORDER },
+    });
+    // Their own columns (role, contact, OT …) travel with the person.
+    for (const { col } of layout.otherCols) {
+      if (col === layout.nameCol) continue;
+      const v = extras[col];
+      if (v === undefined) continue;
+      put(r, col, typeof v === 'number'
+        ? { t: 'n', v, s: { font: { sz: 10 }, alignment: { horizontal: 'center' }, border: BORDER } }
+        : { t: 's', v: String(v), s: { font: { sz: 10 }, alignment: { horizontal: 'center' }, border: BORDER } });
+    }
+
+    const row = roster.cells[emp.id] ?? [];
+    for (const { day, col } of layout.dayCols) {
+      if (day > nDays) continue;
+      const code = row[day - 1]?.code ?? OFF;
+      const tone = byId.get(code)?.tone ?? 'off';
+      const colour = EXPORT_COLORS[tone];
+      put(r, col, {
+        t: 's',
+        v: code === OFF ? '' : code,
+        s: {
+          font: { sz: 10, bold: true, color: { rgb: colour.font } },
+          fill: { patternType: 'solid', fgColor: { rgb: colour.fill } },
+          alignment: { horizontal: 'center', vertical: 'center' },
+          border: BORDER,
+        },
+      });
+    }
+  });
+
+  sheet['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxRow, c: maxCol } });
+  sheet['!cols'] = Array.from({ length: maxCol + 1 }, (_, c) =>
+    layout.dayCols.some((d) => d.col === c) ? { wch: 4.5 } : { wch: c === layout.nameCol ? 24 : 10 },
+  );
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, sheet as XLSX.WorkSheet, layout.sheetName.slice(0, 31));
+  return wb;
+}
+
+/** Downloads the month in its original imported layout. Returns the filename. */
+export function downloadFromLayout(input: Omit<ExportInput, 'line'>, layout: SheetLayout): string {
+  const wb = buildFromLayout(input, layout);
+  const filename = `${layout.sheetName.replace(/[^\w.-]+/g, '_')}_${MONTH_ABBR[input.roster.month - 1]}-${input.roster.year}.xlsx`;
+  const bytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx', cellStyles: true });
+  const blob = new Blob([bytes], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return filename;
+}

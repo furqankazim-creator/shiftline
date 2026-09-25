@@ -138,6 +138,26 @@ export interface RosterMonth {
   updatedAt: number;
 }
 
+/**
+ * Where everything sat in an imported workbook, so Export can write the month
+ * back in the supervisor's own template rather than ShiftLine's layout.
+ */
+export interface SheetLayout {
+  sheetName: string;
+  /** Row holding "Name", "Employee", … (0-based). */
+  headerRow: number;
+  /** Column holding employee names (0-based). */
+  nameCol: number;
+  /** Everything above the header row, verbatim, e.g. a title banner. */
+  preamble: { r: number; c: number; value: string | number }[];
+  /** Header text for every non-day column, so they can be rewritten as-is. */
+  otherCols: { col: number; header: string }[];
+  /** Non-day cell values per employee row, keyed by column index. */
+  extraByName: Record<string, Record<number, string | number>>;
+  /** Day number -> column index, and the exact header text used. */
+  dayCols: { day: number; col: number; header: string }[];
+}
+
 export type Severity = 'error' | 'warning';
 
 export interface Issue {

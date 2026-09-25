@@ -1,7 +1,10 @@
+import { useLiveQuery } from 'dexie-react-hooks';
+
 import { useStore } from '@/app/store';
 import { Button, Modal, useToast } from '@/components/ui';
-import { exportBackup } from '@/data/db';
+import { db, exportBackup } from '@/data/db';
 import { monthLabel } from '@/domain/calendar';
+import { rosterId } from '@/domain/generator';
 
 
 export function ExportModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -10,11 +13,31 @@ export function ExportModal({ open, onClose }: { open: boolean; onClose: () => v
 
   const line = lines.find((l) => l.id === settings.activeLineId);
 
+  // The shape of the workbook this month was imported from, if it was.
+  const stored = useLiveQuery(
+    () => (roster ? db.layouts.get(rosterId(roster.lineId, roster.year, roster.month)) : undefined),
+    [roster?.lineId, roster?.year, roster?.month],
+  );
+
   const options = [
+    ...(stored
+      ? [{
+          key: 'original',
+          title: `Original imported format (${stored.layout.sheetName})`,
+          body: 'Writes this month back into the workbook you imported — same title, same header position, your own extra columns kept, day headers spelled the same way. Only the shift letters are updated.',
+          action: async () => {
+            if (!roster) return;
+            const { downloadFromLayout } = await import('@/io/exportXlsx');
+            const filename = downloadFromLayout({ roster, employees, codes }, stored.layout);
+            toast(`Saved ${filename}`, 'ok');
+            onClose();
+          },
+        }]
+      : []),
     {
       key: 'operational',
-      title: 'Operational Roster (same format as imported)',
-      body: 'Exports in the exact same format as the client\'s operational Excel — sections by Role & Shift (PIC Morning, MP Night…), date headers, verbose shift timings, and count rows.',
+      title: 'Operational roster layout',
+      body: 'Sections by role and shift (PIC Morning, MP Night…), date headers, verbose shift timings and count rows.',
       action: async () => {
         if (!roster || !line) return;
         const { downloadOperationalXlsx } = await import('@/io/exportXlsx');

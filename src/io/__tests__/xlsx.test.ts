@@ -5,7 +5,7 @@ import XLSX from 'xlsx-js-style';
 
 import { SEED_CODES, SEED_EMPLOYEES, SEED_LEAVE, SEED_LINES } from '@/data/seed';
 import { generateMonth } from '@/domain/generator';
-import { BACKUP_SHEET, buildBackupWorkbook, buildWorkbook } from '@/io/exportXlsx';
+import { BACKUP_SHEET, buildBackupWorkbook, buildFromLayout, buildWorkbook } from '@/io/exportXlsx';
 import { importBackupWorkbook, importSheet, listSheets, toRecords } from '@/io/importXlsx';
 
 /** The client's real workbook, kept as a fixture so the parser can't drift. */
@@ -192,5 +192,53 @@ describe('Excel backup round-trip', () => {
     const back = importBackupWorkbook(bytes2);
     expect(back.employees).toHaveLength(SEED_EMPLOYEES.length);
     expect(new Set(back.employees.map((e) => e.lineId))).toEqual(new Set(SEED_EMPLOYEES.map((e) => e.lineId)));
+  });
+});
+
+describe("exporting back into the client's own layout", () => {
+  const buffer = sourceBuffer();
+  const sheets = listSheets(buffer);
+  const source = importSheet(buffer, sheets[1]);
+  const { employees, leave } = toRecords(source, 'line5', (_n, i) => `e${String(i + 1).padStart(2, '0')}`);
+  const roster = generateMonth({
+    year: source.year, month: source.month, lineId: 'line5', employees, leaveBlocks: leave, overrides: {},
+  });
+
+  /** Export through the captured layout, then read the result back in. */
+  const reimported = () => {
+    const wb = buildFromLayout({ roster, employees, codes: SEED_CODES }, source.layout);
+    const bytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx', cellStyles: true }) as ArrayBuffer;
+    return importSheet(bytes);
+  };
+
+  it('captures where the source put its header and days', () => {
+    expect(source.layout.nameCol).toBeGreaterThanOrEqual(0);
+    expect(source.layout.dayCols).toHaveLength(30);
+    expect(source.layout.dayCols[0].day).toBe(1);
+    expect(source.layout.sheetName).toBe(sheets[1]);
+  });
+
+  it('keeps the sheet name, month and every employee', () => {
+    const back = reimported();
+    expect(back.sheetName).toBe(source.sheetName);
+    expect(back.year).toBe(source.year);
+    expect(back.month).toBe(source.month);
+    expect(back.employees.map((e) => e.name)).toEqual(source.employees.map((e) => e.name));
+  });
+
+  it('round-trips every shift letter in the grid', () => {
+    const back = reimported();
+    back.employees.forEach((row, i) => {
+      expect(row.codes).toEqual(roster.cells[employees[i].id].map((c) => c.code));
+    });
+  });
+
+  it('writes the day headers exactly as the source spelled them', () => {
+    const wb = buildFromLayout({ roster, employees, codes: SEED_CODES }, source.layout);
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    for (const { col, header } of source.layout.dayCols) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: source.layout.headerRow, c: col })];
+      expect(String(cell?.v)).toBe(header);
+    }
   });
 });
