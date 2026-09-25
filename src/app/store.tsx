@@ -4,7 +4,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { DEFAULT_SETTINGS, db, ensureSeeded, newId, patchSettings, type Settings } from '@/data/db';
+import { DEFAULT_SETTINGS, codeKey, db, ensureSeeded, newId, patchSettings, type Settings } from '@/data/db';
 import { buildColumns, daysInMonth, monthKey, shiftMonth } from '@/domain/calendar';
 import {
   generateMonth, rosterId, setCell as setCellPure, setRange as setRangePure,
@@ -21,6 +21,8 @@ interface RosterStore {
   settings: Settings;
   lines: Line[];
   codes: ShiftCode[];
+  /** Every code in the database, including ones scoped to other months. */
+  allCodes: ShiftCode[];
   employees: Employee[];
   leave: LeaveBlock[];
   roster: RosterMonth | null;
@@ -54,7 +56,7 @@ interface RosterStore {
   reorderEmployees(ids: string[]): Promise<void>;
 
   saveCode(code: ShiftCode): Promise<void>;
-  removeCode(id: string): Promise<void>;
+  removeCode(id: string, scope?: string): Promise<void>;
   saveLine(line: Line): Promise<void>;
   removeLine(id: string): Promise<void>;
 
@@ -85,7 +87,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [rawSettings],
   );
   const lines = useLiveQuery(() => db.lines.orderBy('order').toArray(), [], []) ?? [];
-  const codes = useLiveQuery(() => db.codes.orderBy('order').toArray(), [], []) ?? [];
+  const allCodes = useLiveQuery(() => db.codes.orderBy('order').toArray(), [], []) ?? [];
   const leave = useLiveQuery(() => db.leave.toArray(), [], []) ?? [];
 
   const { activeLineId, activeYear, activeMonth } = settings;
@@ -112,6 +114,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [, forceRender] = useState(0);
 
   const id = rosterId(activeLineId, activeYear, activeMonth);
+
+  /**
+   * The codes the brush and validator see: the standard set, plus the ones an
+   * import invented for exactly this month. A code that came in on one sheet
+   * stays on that sheet.
+   */
+  const codes = useMemo(
+    () => allCodes.filter((c) => !c.scope || c.scope === id).sort((a, b) => a.order - b.order),
+    [allCodes, id],
+  );
 
   /**
    * Loads the stored grid for the active month, or generates one on the fly.
@@ -384,11 +396,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveCode = useCallback(async (code: ShiftCode) => {
-    await db.codes.put(code);
+    await db.codes.put({ ...code, key: codeKey(code.id, code.scope) });
   }, []);
 
-  const removeCode = useCallback(async (codeId: string) => {
-    await db.codes.delete(codeId);
+  const removeCode = useCallback(async (codeId: string, scope?: string) => {
+    await db.codes.delete(codeKey(codeId, scope));
   }, []);
 
   const saveLine = useCallback(async (line: Line) => {
@@ -416,6 +428,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     settings,
     lines,
     codes,
+    allCodes,
     employees,
     leave: lineLeave,
     roster,

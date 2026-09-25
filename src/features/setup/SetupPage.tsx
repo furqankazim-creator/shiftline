@@ -67,7 +67,7 @@ export function SetupPage() {
         {/* ------------------------------------------------- shift codes */}
         <Section
           title="Shift codes"
-          description="The tokens written into the grid — their colour, timing and how many people each needs."
+          description="The tokens written into the grid — their colour, timing and how many people each needs. Codes marked “this month only” came from an Excel import and stay on that month."
           action={
             <Button
               size="sm"
@@ -89,7 +89,7 @@ export function SetupPage() {
               const tone = toneVars(code.tone);
               return (
                 <button
-                  key={code.id}
+                  key={`${code.scope ?? ""}:${code.id}`}
                   onClick={() => setEditingCode(code)}
                   className="grid w-full grid-cols-[56px_1fr_64px_20px] md:grid-cols-[56px_1fr_120px_84px_72px_20px] items-center gap-3 bg-[var(--surface)] px-3 md:px-4 py-2.5 text-left hover:bg-[var(--surface-2)] transition-colors"
                 >
@@ -102,7 +102,17 @@ export function SetupPage() {
                   >
                     {code.id}
                   </span>
-                  <span className="text-[13px]">{code.label}</span>
+                  <span className="text-[13px]">
+                    {code.label}
+                    {code.scope && (
+                      <span
+                        className="ml-2 rounded bg-[var(--surface-3)] px-1.5 py-px text-[10px] uppercase tracking-wide text-ink-3"
+                        title="Came in with an Excel import — only on that month's brush"
+                      >
+                        this month only
+                      </span>
+                    )}
+                  </span>
                   <span className="hidden md:block font-mono text-[11.5px] text-ink-3">{code.timing}</span>
                   <span className="text-[11.5px] text-ink-3">
                     {code.minHeadcount > 0 ? `min ${code.minHeadcount}` : '—'}
@@ -345,7 +355,7 @@ export function SetupPage() {
             toast(`Shift code ${next.id} saved.`, 'ok');
           }}
           onDelete={async () => {
-            await removeCode(editingCode.id);
+            await removeCode(editingCode.id, editingCode.scope);
             setEditingCode(null);
             toast('Shift code removed.', 'ok');
           }}

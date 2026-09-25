@@ -46,10 +46,24 @@ export const DEFAULT_SETTINGS: Settings = {
   fontFamily: 'default',
 };
 
+/**
+ * Primary key for a shift code.
+ *
+ * Codes are identified in the grid by their token ("M", "H"), but a token is
+ * only unique within its scope: two imported sheets may each define their own
+ * "H". The stored row therefore carries a surrogate key combining the two.
+ */
+export function codeKey(id: string, scope?: string): string {
+  return `${scope ?? '*'}::${id}`;
+}
+
+/** A ShiftCode as stored: the surrogate primary key is added on write. */
+export type StoredShiftCode = ShiftCode & { key: string };
+
 class RosterDB extends Dexie {
   lines!: EntityTable<Line, 'id'>;
   employees!: EntityTable<Employee, 'id'>;
-  codes!: EntityTable<ShiftCode, 'id'>;
+  codes!: EntityTable<StoredShiftCode, 'key'>;
   leave!: EntityTable<LeaveBlock, 'id'>;
   rosters!: EntityTable<RosterMonth, 'id'>;
   settings!: EntityTable<Settings, 'key'>;
@@ -63,6 +77,33 @@ class RosterDB extends Dexie {
       leave: 'id, employeeId, from, to',
       rosters: 'id, lineId, [year+month]',
       settings: 'key',
+    });
+
+    // v2: add ML / EL / NL to existing databases so they appear globally on all
+    // lines — not just on lines where an import happened to create them.
+    this.version(2).stores({}).upgrade(async (tx) => {
+      const EXTRA: ShiftCode[] = [
+        { id: 'ML', label: 'Morning Late', timing: '07:00 – 18:00', tone: 'morning', minHeadcount: 0, countsAsEngineer: false, rotates: false, order: 11 },
+        { id: 'EL', label: 'Evening Late', timing: '15:00 – 00:00', tone: 'evening', minHeadcount: 0, countsAsEngineer: false, rotates: false, order: 12 },
+        { id: 'NL', label: 'Night Late',   timing: '19:00 – 07:00', tone: 'night',   minHeadcount: 0, countsAsEngineer: false, rotates: false, order: 13 },
+      ];
+      const codesTable = tx.table<ShiftCode, string>('codes');
+      for (const code of EXTRA) {
+        const existing = await codesTable.get(code.id);
+        if (!existing) await codesTable.put(code);
+      }
+    });
+
+    // v3: codes are keyed by (scope, id) so an imported sheet can own a code
+    // token without it appearing on every other month's brush. Existing codes
+    // have no scope, so they stay global — nothing disappears on upgrade.
+    this.version(3).stores({
+      codes: 'key, id, scope, order',
+    }).upgrade(async (tx) => {
+      const codesTable = tx.table('codes');
+      const all = await codesTable.toArray();
+      await codesTable.clear();
+      await codesTable.bulkPut(all.map((c) => ({ ...c, key: codeKey(c.id, c.scope) })));
     });
   }
 }
@@ -82,7 +123,7 @@ export async function ensureSeeded(): Promise<void> {
 
   await db.transaction('rw', db.lines, db.employees, db.codes, db.leave, db.settings, async () => {
     await db.lines.bulkPut(SEED_LINES);
-    await db.codes.bulkPut(SEED_CODES);
+    await db.codes.bulkPut(SEED_CODES.map((c) => ({ ...c, key: codeKey(c.id) })));
     await db.employees.bulkPut(SEED_EMPLOYEES);
     await db.leave.bulkPut(SEED_LEAVE);
     await db.settings.put({ ...DEFAULT_SETTINGS, ...existing, key: 'app', seeded: true });
@@ -133,7 +174,8 @@ export async function importBackupData(data: any): Promise<void> {
         db.leave.clear(), db.rosters.clear(),
       ]);
       await db.lines.bulkPut(data.lines?.length ? data.lines : SEED_LINES);
-      await db.codes.bulkPut(data.codes?.length ? data.codes : SEED_CODES);
+      const restoredCodes: ShiftCode[] = data.codes?.length ? data.codes : SEED_CODES;
+      await db.codes.bulkPut(restoredCodes.map((c) => ({ ...c, key: codeKey(c.id, c.scope) })));
       await db.employees.bulkPut(data.employees);
       await db.leave.bulkPut(data.leave ?? []);
       await db.rosters.bulkPut(data.rosters ?? []);

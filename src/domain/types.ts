@@ -42,6 +42,15 @@ export interface ShiftCode {
   rotates: boolean;
   /** A non-working status (leave, training) rather than a worked shift. */
   isStatus?: boolean;
+  /**
+   * Which roster this code belongs to, as a `RosterMonth.id`
+   * (`${lineId}:${year}-${month}`).
+   *
+   * Undefined means a standard code available everywhere. Codes invented by
+   * an Excel import are scoped to the month they came from, so a one-off code
+   * on one sheet does not turn up on the brush of every other month.
+   */
+  scope?: string;
   order: number;
 }
 

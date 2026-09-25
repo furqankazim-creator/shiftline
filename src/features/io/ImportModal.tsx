@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { useStore } from '@/app/store';
 import { toneVars } from '@/app/tones';
 import { Button, Modal, Select, Switch, cx } from '@/components/ui';
-import { db, newId } from '@/data/db';
+import { codeKey, db, newId } from '@/data/db';
 import { MONTH_NAMES, WEEKDAY_LABELS } from '@/domain/calendar';
 import { rosterId } from '@/domain/generator';
 import { OFF } from '@/domain/types';
@@ -143,16 +143,19 @@ export function ImportModal({
     }
 
     // ---- find which codes are missing from the current setup --------------
+    // Codes this sheet invents belong to this sheet: they are scoped to the
+    // month being imported, so they appear on its brush and nowhere else.
+    const scope = rosterId(targetLine, result.year, result.month);
     const existingIds = new Set(codes.map((c) => c.id));
     const toCreate = [...usedCodes]
       .filter((id) => !existingIds.has(id))
-      .map((id, i) => guessShiftCode(id, codes.length + i));
+      .map((id, i) => ({ ...guessShiftCode(id, codes.length + i), scope }));
 
     // ---- write everything in one transaction ------------------------------
     await db.transaction('rw', db.employees, db.leave, db.rosters, db.codes, async () => {
       // Auto-create any shift codes that don't exist yet
       if (toCreate.length) {
-        await db.codes.bulkPut(toCreate as Parameters<typeof db.codes.bulkPut>[0]);
+        await db.codes.bulkPut(toCreate.map((c) => ({ ...c, key: codeKey(c.id, c.scope) })));
       }
 
       if (replace) {
@@ -297,7 +300,7 @@ export function ImportModal({
             <p className="text-[12px] text-[var(--accent)] leading-snug rounded-lg border border-[var(--accent)] px-3 py-2">
               ✨ New shift codes found:{' '}
               <span className="font-mono font-bold">{result.unknownCodes.join(', ')}</span>.{' '}
-              They will be <strong>auto-created</strong> with colour and timing defaults when you confirm — you can customise them later in Setup → Shift codes.
+              They will be <strong>auto-created</strong> for this month only, with colour and timing defaults — they appear on the brush for this sheet and not on other months. You can customise them in Setup → Shift codes.
             </p>
           )}
 

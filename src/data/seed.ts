@@ -60,6 +60,21 @@ export const SEED_CODES: ShiftCode[] = [
     id: 'NT', label: 'Night – Support', timing: '22:00 – 07:00', tone: 'night',
     minHeadcount: 0, countsAsEngineer: false, rotates: false, order: 8,
   },
+  // Late-shift variants used in operational rosters (Morning Late, Evening Late, Night Late).
+  // These appear when departments import their own Excel files — they are global so they work
+  // on every line, not just the one that was imported into.
+  {
+    id: 'ML', label: 'Morning Late', timing: '07:00 – 18:00', tone: 'morning',
+    minHeadcount: 0, countsAsEngineer: false, rotates: false, order: 11,
+  },
+  {
+    id: 'EL', label: 'Evening Late', timing: '15:00 – 00:00', tone: 'evening',
+    minHeadcount: 0, countsAsEngineer: false, rotates: false, order: 12,
+  },
+  {
+    id: 'NL', label: 'Night Late', timing: '19:00 – 07:00', tone: 'night',
+    minHeadcount: 0, countsAsEngineer: false, rotates: false, order: 13,
+  },
   {
     id: 'LV', label: 'Leave', timing: '—', tone: 'leave',
     minHeadcount: 0, countsAsEngineer: false, rotates: false, isStatus: true, order: 9,
