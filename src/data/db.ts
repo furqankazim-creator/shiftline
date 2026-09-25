@@ -57,6 +57,12 @@ export function codeKey(id: string, scope?: string): string {
   return `${scope ?? '*'}::${id}`;
 }
 
+/** Extra codes switched on for one month via the brush's "+" picker. */
+export interface StoredMonthCodes {
+  rosterId: string;
+  codeIds: string[];
+}
+
 /** An imported sheet's layout, keyed by the roster it belongs to. */
 export interface StoredLayout {
   rosterId: string;
@@ -81,6 +87,8 @@ class RosterDB extends Dexie {
   settings!: EntityTable<Settings, 'key'>;
   /** Source-file shape per roster, so Export can mirror an imported template. */
   layouts!: EntityTable<StoredLayout, 'rosterId'>;
+  /** Codes added to a single month's brush that its grid does not use yet. */
+  monthCodes!: EntityTable<StoredMonthCodes, 'rosterId'>;
 
   constructor() {
     super('shiftline');
@@ -129,6 +137,24 @@ class RosterDB extends Dexie {
     // v4: drop the re-keyed store, and remember the layout of an imported
     // workbook so Export can write the month back in that same shape.
     this.version(4).stores({ codes: null, layouts: 'rosterId' });
+
+    // v5: a month can switch on an existing code without a private copy of it.
+    // Earlier builds cloned the code instead, which listed it twice in Setup;
+    // those duplicates are dropped here.
+    this.version(5).stores({ monthCodes: 'rosterId' }).upgrade(async (tx) => {
+      const table = tx.table('shiftCodes');
+      const all = await table.toArray();
+      const globalIds = new Set(all.filter((c) => !c.scope).map((c) => c.id));
+      const perMonth = new Map<string, string[]>();
+      for (const c of all) {
+        if (!c.scope || !globalIds.has(c.id)) continue;
+        perMonth.set(c.scope, [...(perMonth.get(c.scope) ?? []), c.id]);
+        await table.delete(c.key);
+      }
+      for (const [rosterId, codeIds] of perMonth) {
+        await tx.table('monthCodes').put({ rosterId, codeIds });
+      }
+    });
   }
 }
 

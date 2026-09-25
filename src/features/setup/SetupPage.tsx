@@ -9,7 +9,7 @@ import type { Line, ShiftCode, Weekday } from '@/domain/types';
 
 export function SetupPage() {
   const {
-    codes, lines, settings, saveCode, removeCode, saveLine, removeLine, updateSettings,
+    codes, allCodes, lines, settings, saveCode, removeCode, saveLine, removeLine, updateSettings,
   } = useStore();
   const toast = useToast();
 
@@ -67,7 +67,7 @@ export function SetupPage() {
         {/* ------------------------------------------------- shift codes */}
         <Section
           title="Shift codes"
-          description="The tokens written into the grid — their colour, timing and how many people each needs. Codes marked “this month only” came from an Excel import and stay on that month."
+          description="Every token the app knows. A month's brush shows only the ones that month uses — a tagged code came in with an Excel import and belongs to that month alone."
           action={
             <Button
               size="sm"
@@ -76,7 +76,7 @@ export function SetupPage() {
                 setEditingCode({
                   id: '', label: '', timing: '08:00 – 17:00', tone: 'general',
                   minHeadcount: 0, countsAsEngineer: true, rotates: false,
-                  order: codes.length + 1,
+                  order: allCodes.length + 1,
                 })
               }
             >
@@ -85,7 +85,7 @@ export function SetupPage() {
           }
         >
           <div className="divide-y divide-[var(--line)]">
-            {codes.map((code) => {
+            {allCodes.map((code) => {
               const tone = toneVars(code.tone);
               return (
                 <button
@@ -107,9 +107,9 @@ export function SetupPage() {
                     {code.scope && (
                       <span
                         className="ml-2 rounded bg-[var(--surface-3)] px-1.5 py-px text-[10px] uppercase tracking-wide text-ink-3"
-                        title="Came in with an Excel import — only on that month's brush"
+                        title={`Came in with an Excel import of ${code.scope} — only on that month's brush`}
                       >
-                        this month only
+                        {code.scope}
                       </span>
                     )}
                   </span>

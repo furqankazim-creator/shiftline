@@ -30,7 +30,7 @@ export function ImportModal({
   onClose: () => void;
   onDone: (count: number) => void;
 }) {
-  const { settings, lines, codes, setMonth } = useStore();
+  const { settings, lines, codes, allCodes, setMonth } = useStore();
   const fileInput = useRef<HTMLInputElement>(null);
 
   const [stage, setStage] = useState<Stage>('pick-file');
@@ -146,10 +146,14 @@ export function ImportModal({
     // Codes this sheet invents belong to this sheet: they are scoped to the
     // month being imported, so they appear on its brush and nowhere else.
     const scope = rosterId(targetLine, result.year, result.month);
-    const existingIds = new Set(codes.map((c) => c.id));
+    // A code only needs creating when nothing in the catalogue defines it —
+    // not merely when the month being replaced happened not to use it.
+    const existingIds = new Set(
+      allCodes.filter((c) => !c.scope || c.scope === scope).map((c) => c.id),
+    );
     const toCreate = [...usedCodes]
       .filter((id) => !existingIds.has(id))
-      .map((id, i) => ({ ...guessShiftCode(id, codes.length + i), scope }));
+      .map((id, i) => ({ ...guessShiftCode(id, allCodes.length + i), scope }));
 
     // ---- write everything in one transaction ------------------------------
     await db.transaction('rw', db.employees, db.leave, db.rosters, db.shiftCodes, db.layouts, async () => {

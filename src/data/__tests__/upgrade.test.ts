@@ -48,8 +48,46 @@ describe('upgrading a v2 database', () => {
     // The rest of the data is untouched and the old store is gone.
     expect((await db.employees.get('e01'))?.name).toBe('Abdul Saeed');
     expect(db.tables.map((t) => t.name)).not.toContain('codes');
-    expect(db.verno).toBe(4);
+    expect(db.verno).toBe(5);
 
     db.close();
+  });
+});
+
+/**
+ * A build in between cloned a global code to put it on one month's brush,
+ * which listed the same code twice in Setup ("Evening" and "Evening · this
+ * month only"). The clones are removed on upgrade and recorded against the
+ * month instead.
+ */
+describe('cleaning up cloned codes', () => {
+  it('drops a scoped copy of a global code and remembers the month', async () => {
+    const { db, codeKey } = await import('@/data/db');
+    if (!db.isOpen()) await db.open();
+    const SEPT = 'line4:2026-9';
+
+    await db.shiftCodes.bulkPut([
+      { id: 'E', label: 'Evening', timing: '14:00 – 23:00', tone: 'evening', minHeadcount: 2, countsAsEngineer: true, rotates: true, order: 2, key: codeKey('E') },
+      { id: 'E', label: 'Evening', timing: '14:00 – 23:00', tone: 'evening', minHeadcount: 0, countsAsEngineer: true, rotates: true, order: 2, scope: SEPT, key: codeKey('E', SEPT) },
+      { id: 'JAAFAR', label: 'JAAFAR', timing: '', tone: 'off', minHeadcount: 0, countsAsEngineer: false, rotates: false, order: 500, scope: SEPT, key: codeKey('JAAFAR', SEPT) },
+    ]);
+
+    // Re-run the v5 cleanup over the current contents.
+    const all = await db.shiftCodes.toArray();
+    const globalIds = new Set(all.filter((c) => !c.scope).map((c) => c.id));
+    for (const c of all) {
+      if (c.scope && globalIds.has(c.id)) {
+        await db.shiftCodes.delete(codeKey(c.id, c.scope));
+        const prev = (await db.monthCodes.get(c.scope))?.codeIds ?? [];
+        await db.monthCodes.put({ rosterId: c.scope, codeIds: [...prev, c.id] });
+      }
+    }
+
+    // Evening appears once; the genuinely new code keeps its scope.
+    const evenings = (await db.shiftCodes.toArray()).filter((c) => c.id === 'E');
+    expect(evenings).toHaveLength(1);
+    expect(evenings[0].scope).toBeUndefined();
+    expect((await db.shiftCodes.get(codeKey('JAAFAR', SEPT)))?.scope).toBe(SEPT);
+    expect((await db.monthCodes.get(SEPT))?.codeIds).toContain('E');
   });
 });

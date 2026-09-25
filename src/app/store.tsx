@@ -127,8 +127,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
    * Morning/Night operation should not be told every day that "nobody is on
    * Evening" because some other line runs an Evening shift.
    */
+  const extraCodes = useLiveQuery(() => db.monthCodes.get(id), [id])?.codeIds ?? [];
+
   const codes = useMemo(() => {
-    const used = new Set<string>();
+    const used = new Set(extraCodes);
     if (roster) {
       for (const row of Object.values(roster.cells)) {
         for (const cell of row) if (cell.code && cell.code !== OFF) used.add(cell.code);
@@ -137,21 +139,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return allCodes
       .filter((c) => c.scope === id || (!c.scope && used.has(c.id)))
       .sort((a, b) => a.order - b.order);
-  }, [allCodes, roster, id]);
+  }, [allCodes, roster, id, extraCodes.join(',')]);
 
   /**
-   * Brings a code the month does not yet use onto its brush, by giving this
-   * month its own copy. It stays on this month only.
+   * Switches an existing code on for this month's brush. It is recorded
+   * against the month, not copied, so Setup still lists the code once.
    */
   const enableCode = useCallback(
     async (codeId: string) => {
-      const source = allCodes.find((c) => c.id === codeId && !c.scope)
-        ?? allCodes.find((c) => c.id === codeId);
-      if (!source) return;
-      const { key: _drop, ...rest } = source as typeof source & { key?: string };
-      await db.shiftCodes.put({ ...rest, scope: id, key: codeKey(codeId, id) });
+      const current = (await db.monthCodes.get(id))?.codeIds ?? [];
+      if (current.includes(codeId)) return;
+      await db.monthCodes.put({ rosterId: id, codeIds: [...current, codeId] });
     },
-    [allCodes, id],
+    [id],
   );
 
   /**
