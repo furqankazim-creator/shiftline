@@ -30,6 +30,14 @@ export interface Settings {
   zoomLevel: number;
   fontSize: FontSize;
   fontFamily: FontFamily;
+  /**
+   * The month each line was last on, keyed by line id.
+   *
+   * Lines cover different periods — one sheet is imported for August, another
+   * for October — so switching line returns to where that line was rather
+   * than carrying the current month across.
+   */
+  lineMonths?: Record<string, { year: number; month: number }>;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -44,6 +52,7 @@ export const DEFAULT_SETTINGS: Settings = {
   zoomLevel: 100,
   fontSize: 'normal',
   fontFamily: 'default',
+  lineMonths: {},
 };
 
 /**

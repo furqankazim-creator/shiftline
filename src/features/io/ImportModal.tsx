@@ -30,7 +30,7 @@ export function ImportModal({
   onClose: () => void;
   onDone: (count: number) => void;
 }) {
-  const { settings, lines, codes, allCodes, setMonth } = useStore();
+  const { settings, lines, codes, allCodes, openSheet } = useStore();
   const fileInput = useRef<HTMLInputElement>(null);
 
   const [stage, setStage] = useState<Stage>('pick-file');
@@ -175,7 +175,8 @@ export function ImportModal({
       await db.layouts.put({ rosterId: rid, layout: result.layout });
     });
 
-    setMonth(result.year, result.month);
+    // Land on the sheet that was just imported, on the line it went into.
+    await openSheet(targetLine, result.year, result.month);
     onDone(employees.length);
     reset();
     onClose();

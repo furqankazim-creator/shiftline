@@ -42,6 +42,8 @@ interface RosterStore {
   saveRoster: () => Promise<string>;
 
   setMonth(year: number, month: number): void;
+  /** Opens a specific line at a specific month — used after an import. */
+  openSheet(lineId: string, year: number, month: number): Promise<void>;
   stepMonth(delta: number): void;
   setLine(lineId: string): void;
   setTheme(theme: 'dark' | 'light'): void;
@@ -289,16 +291,40 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   );
 
   // ---- actions ----------------------------------------------------------
-  const setMonth = useCallback((year: number, month: number) => {
-    void patchSettings({ activeYear: year, activeMonth: month });
-  }, []);
+  /** Moving month also records where this line is, for when we come back. */
+  const goToMonth = useCallback(
+    (year: number, month: number) =>
+      patchSettings({
+        activeYear: year,
+        activeMonth: month,
+        lineMonths: { ...(settings.lineMonths ?? {}), [activeLineId]: { year, month } },
+      }),
+    [activeLineId, settings.lineMonths],
+  );
+
+  const setMonth = useCallback(
+    (year: number, month: number) => void goToMonth(year, month),
+    [goToMonth],
+  );
+
+  /** Shows the sheet that was just imported, and remembers it for that line. */
+  const openSheet = useCallback(
+    (lineId: string, year: number, month: number) =>
+      patchSettings({
+        activeLineId: lineId,
+        activeYear: year,
+        activeMonth: month,
+        lineMonths: { ...(settings.lineMonths ?? {}), [lineId]: { year, month } },
+      }),
+    [settings.lineMonths],
+  );
 
   const stepMonth = useCallback(
     (delta: number) => {
       const next = shiftMonth(activeYear, activeMonth, delta);
-      void patchSettings({ activeYear: next.year, activeMonth: next.month });
+      void goToMonth(next.year, next.month);
     },
-    [activeYear, activeMonth],
+    [activeYear, activeMonth, goToMonth],
   );
 
   const paintCell = useCallback(
@@ -440,6 +466,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await db.shiftCodes.delete(codeKey(codeId, scope));
   }, []);
 
+  /**
+   * Switching line also moves to the month that line was last on.
+   *
+   * Each line's sheet covers its own period — one is imported for August,
+   * another for October — so carrying the current month across would land on
+   * an empty month of a line that has real data elsewhere.
+   */
+  const switchLine = useCallback(
+    async (lineId: string) => {
+      const remembered = settings.lineMonths?.[lineId];
+      if (remembered) {
+        await patchSettings({
+          activeLineId: lineId,
+          activeYear: remembered.year,
+          activeMonth: remembered.month,
+        });
+        return;
+      }
+      // Never visited: open the month that line actually holds data for.
+      const rosters = await db.rosters.where('lineId').equals(lineId).toArray();
+      const withEdits = rosters.filter((r) => Object.keys(r.overrides ?? {}).length > 0);
+      const best = (withEdits.length ? withEdits : rosters)
+        .reduce<typeof rosters[number] | null>((a, b) => (!a || b.updatedAt > a.updatedAt ? b : a), null);
+      await patchSettings(
+        best
+          ? { activeLineId: lineId, activeYear: best.year, activeMonth: best.month }
+          : { activeLineId: lineId },
+      );
+    },
+    [settings.lineMonths],
+  );
+
   const saveLine = useCallback(async (line: Line) => {
     const isNew = !(await db.lines.get(line.id));
     await db.lines.put(line);
@@ -486,8 +544,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     saveRoster,
 
     setMonth,
+    openSheet,
     stepMonth,
-    setLine: (lineId) => void patchSettings({ activeLineId: lineId }),
+    setLine: (lineId) => void switchLine(lineId),
     setTheme: (theme) => void patchSettings({ theme }),
     updateSettings: (patch) => patchSettings(patch),
 
