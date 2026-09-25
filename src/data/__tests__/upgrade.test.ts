@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
  * walks the real upgrade path rather than starting from an empty database.
  */
 describe('upgrading a v2 database', () => {
-  it('opens, keeps every code, and makes them global', async () => {
+  it('opens, and gives every line its own copy of the codes', async () => {
     // ---- a database as shipped before the scoping change -----------------
     const old = new Dexie('shiftline');
     old.version(1).stores({
@@ -29,6 +29,10 @@ describe('upgrading a v2 database', () => {
       { id: 'N', label: 'Night', timing: '22:00 – 07:00', tone: 'night', minHeadcount: 2, countsAsEngineer: true, rotates: true, order: 3 },
       { id: 'H', label: 'Holiday', timing: '', tone: 'off', minHeadcount: 0, countsAsEngineer: false, rotates: false, order: 99 },
     ]);
+    await old.table('lines').bulkPut([
+      { id: 'line4', name: 'Line 4', prefix: 'SLV', order: 1 },
+      { id: 'line5', name: 'Line 5', prefix: 'SLV', order: 2 },
+    ]);
     await old.table('employees').put({
       id: 'e01', lineId: 'line5', name: 'Abdul Saeed', contact: '', order: 1,
       defaultShift: 'M', restDays: [5, 6],
@@ -39,16 +43,20 @@ describe('upgrading a v2 database', () => {
     const { db, codeKey } = await import('@/data/db');
     await db.open();
 
-    const codes = await db.shiftCodes.toArray();
-    expect(codes.map((c) => c.id).sort()).toEqual(['H', 'M', 'N']);
-    // Pre-existing codes carry no scope, so they stay on every month's brush.
-    expect(codes.every((c) => c.scope === undefined)).toBe(true);
-    expect((await db.shiftCodes.get(codeKey('H')))?.label).toBe('Holiday');
+    // Every line ends up with its own copy of what was there before.
+    const all = await db.shiftCodes.toArray();
+    const ids = (lineId: string) =>
+      all.filter((c) => c.scope === lineId).map((c) => c.id).sort();
+    expect(ids('line4')).toEqual(['H', 'M', 'N']);
+    expect(ids('line5')).toEqual(['H', 'M', 'N']);
+    expect((await db.shiftCodes.get(codeKey('H', 'line4')))?.label).toBe('Holiday');
+    // The unscoped rows remain only as the template for new lines.
+    expect(all.filter((c) => !c.scope).map((c) => c.id).sort()).toEqual(['H', 'M', 'N']);
 
     // The rest of the data is untouched and the old store is gone.
     expect((await db.employees.get('e01'))?.name).toBe('Abdul Saeed');
     expect(db.tables.map((t) => t.name)).not.toContain('codes');
-    expect(db.verno).toBe(5);
+    expect(db.verno).toBe(6);
 
     db.close();
   });

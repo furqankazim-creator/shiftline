@@ -57,6 +57,17 @@ export function codeKey(id: string, scope?: string): string {
   return `${scope ?? '*'}::${id}`;
 }
 
+/** The starter set a newly created line is given, as its own private copy. */
+export async function seedCodesForLine(lineId: string): Promise<void> {
+  const template = await db.shiftCodes.filter((c) => !c.scope).toArray();
+  const source = template.length ? template : SEED_CODES;
+  await db.shiftCodes.bulkPut(
+    source.map(({ key: _k, ...c }: ShiftCode & { key?: string }) => ({
+      ...c, scope: lineId, key: codeKey(c.id, lineId),
+    })),
+  );
+}
+
 /** Extra codes switched on for one month via the brush's "+" picker. */
 export interface StoredMonthCodes {
   rosterId: string;
@@ -155,6 +166,32 @@ class RosterDB extends Dexie {
         await tx.table('monthCodes').put({ rosterId, codeIds });
       }
     });
+
+    // v6: each line keeps its own shift codes, so editing one line's Night
+    // minimum no longer changes every other line's. The unscoped rows stay as
+    // the template new lines are copied from.
+    this.version(6).stores({}).upgrade(async (tx) => {
+      const table = tx.table('shiftCodes');
+      const lines = await tx.table('lines').toArray();
+      const all = await table.toArray();
+      const template = all.filter((c) => !c.scope);
+
+      for (const line of lines) {
+        // Anything previously scoped to one of this line's months becomes a
+        // code of the line itself.
+        const fromMonths = all.filter((c) => c.scope?.startsWith(`${line.id}:`));
+        const own = new Map<string, Record<string, unknown>>();
+        for (const c of template) own.set(c.id, { ...c });
+        for (const c of fromMonths) own.set(c.id, { ...c });
+        for (const c of own.values()) {
+          await table.put({ ...c, scope: line.id, key: codeKey(c.id as string, line.id) });
+        }
+      }
+      // Drop the month-scoped rows now that the line owns them.
+      for (const c of all) {
+        if (c.scope && c.scope.includes(':')) await table.delete(c.key);
+      }
+    });
   }
 }
 
@@ -173,7 +210,13 @@ export async function ensureSeeded(): Promise<void> {
 
   await db.transaction('rw', db.lines, db.employees, db.shiftCodes, db.leave, db.settings, async () => {
     await db.lines.bulkPut(SEED_LINES);
+    // The unscoped rows are the template; each line gets its own copy.
     await db.shiftCodes.bulkPut(SEED_CODES.map((c) => ({ ...c, key: codeKey(c.id) })));
+    for (const line of SEED_LINES) {
+      await db.shiftCodes.bulkPut(
+        SEED_CODES.map((c) => ({ ...c, scope: line.id, key: codeKey(c.id, line.id) })),
+      );
+    }
     await db.employees.bulkPut(SEED_EMPLOYEES);
     await db.leave.bulkPut(SEED_LEAVE);
     await db.settings.put({ ...DEFAULT_SETTINGS, ...existing, key: 'app', seeded: true });

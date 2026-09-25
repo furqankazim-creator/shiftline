@@ -9,7 +9,7 @@ import type { Line, ShiftCode, Weekday } from '@/domain/types';
 
 export function SetupPage() {
   const {
-    codes, allCodes, lines, settings, saveCode, removeCode, saveLine, removeLine, updateSettings,
+    codes, lineCodes, lines, settings, saveCode, removeCode, saveLine, removeLine, updateSettings,
   } = useStore();
   const toast = useToast();
 
@@ -67,7 +67,7 @@ export function SetupPage() {
         {/* ------------------------------------------------- shift codes */}
         <Section
           title="Shift codes"
-          description="Every token the app knows. A month's brush shows only the ones that month uses — a tagged code came in with an Excel import and belongs to that month alone."
+          description="This line's own tokens — colour, timing and how many people each needs. Every line keeps a separate set, so changing one here never affects another line."
           action={
             <Button
               size="sm"
@@ -76,7 +76,8 @@ export function SetupPage() {
                 setEditingCode({
                   id: '', label: '', timing: '08:00 – 17:00', tone: 'general',
                   minHeadcount: 0, countsAsEngineer: true, rotates: false,
-                  order: allCodes.length + 1,
+                  order: lineCodes.length + 1,
+                  scope: settings.activeLineId,
                 })
               }
             >
@@ -85,7 +86,7 @@ export function SetupPage() {
           }
         >
           <div className="divide-y divide-[var(--line)]">
-            {allCodes.map((code) => {
+            {lineCodes.map((code) => {
               const tone = toneVars(code.tone);
               return (
                 <button
@@ -104,14 +105,6 @@ export function SetupPage() {
                   </span>
                   <span className="text-[13px]">
                     {code.label}
-                    {code.scope && (
-                      <span
-                        className="ml-2 rounded bg-[var(--surface-3)] px-1.5 py-px text-[10px] uppercase tracking-wide text-ink-3"
-                        title={`Came in with an Excel import of ${code.scope} — only on that month's brush`}
-                      >
-                        {code.scope}
-                      </span>
-                    )}
                   </span>
                   <span className="hidden md:block font-mono text-[11.5px] text-ink-3">{code.timing}</span>
                   <span className="text-[11.5px] text-ink-3">

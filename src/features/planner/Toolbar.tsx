@@ -23,15 +23,15 @@ export function Toolbar({
   brush, setBrush, onGenerate, onRotate, onImport, onExport, insightsOpen, toggleInsights,
 }: Props) {
   const {
-    settings, lines, codes, allCodes, enableCode, setLine, setMonth, stepMonth, issues, undo, redo,
+    settings, lines, codes, lineCodes, enableCode, setLine, setMonth, stepMonth, issues, undo, redo,
     updateSettings, saveStatus, saveRoster,
   } = useStore();
   const [addCodeOpen, setAddCodeOpen] = useState(false);
   const toast = useToast();
   // Codes that exist but this month does not use yet — offered behind "＋".
   const shown = new Set(codes.map((c) => c.id));
-  const availableToAdd = allCodes
-    .filter((c) => !c.scope && !shown.has(c.id))
+  const availableToAdd = lineCodes
+    .filter((c) => !shown.has(c.id))
     .sort((a, b) => a.order - b.order);
   const errors = issues.filter((i) => i.severity === 'error').length;
   const warnings = issues.length - errors;

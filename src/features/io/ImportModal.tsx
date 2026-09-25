@@ -143,17 +143,17 @@ export function ImportModal({
     }
 
     // ---- find which codes are missing from the current setup --------------
-    // Codes this sheet invents belong to this sheet: they are scoped to the
-    // month being imported, so they appear on its brush and nowhere else.
-    const scope = rosterId(targetLine, result.year, result.month);
+    // Codes this sheet invents belong to the line being imported into, so they
+    // never appear on another line's grid.
+    const rid = rosterId(targetLine, result.year, result.month);
     // A code only needs creating when nothing in the catalogue defines it —
     // not merely when the month being replaced happened not to use it.
-    const existingIds = new Set(
-      allCodes.filter((c) => !c.scope || c.scope === scope).map((c) => c.id),
+    const lineCodeIds = new Set(
+      allCodes.filter((c) => c.scope === targetLine).map((c) => c.id),
     );
     const toCreate = [...usedCodes]
-      .filter((id) => !existingIds.has(id))
-      .map((id, i) => ({ ...guessShiftCode(id, allCodes.length + i), scope }));
+      .filter((id) => !lineCodeIds.has(id))
+      .map((id, i) => ({ ...guessShiftCode(id, lineCodeIds.size + i), scope: targetLine }));
 
     // ---- write everything in one transaction ------------------------------
     await db.transaction('rw', db.employees, db.leave, db.rosters, db.shiftCodes, db.layouts, async () => {
@@ -170,9 +170,9 @@ export function ImportModal({
       await db.employees.bulkPut(employees);
       await db.leave.bulkPut(leave);
       // Drop the cached grid so it rebuilds from the imported rules.
-      await db.rosters.delete(scope);
+      await db.rosters.delete(rid);
       // Remember the source file's shape so Export can hand it back the same way.
-      await db.layouts.put({ rosterId: scope, layout: result.layout });
+      await db.layouts.put({ rosterId: rid, layout: result.layout });
     });
 
     setMonth(result.year, result.month);
@@ -306,7 +306,7 @@ export function ImportModal({
             <p className="text-[12px] text-[var(--accent)] leading-snug rounded-lg border border-[var(--accent)] px-3 py-2">
               ✨ New shift codes found:{' '}
               <span className="font-mono font-bold">{result.unknownCodes.join(', ')}</span>.{' '}
-              They will be <strong>auto-created</strong> for this month only, with colour and timing defaults — they appear on the brush for this sheet and not on other months. You can customise them in Setup → Shift codes.
+              They will be <strong>auto-created for this line only</strong>, with colour and timing defaults — other lines are untouched. You can customise them in Setup → Shift codes.
             </p>
           )}
 

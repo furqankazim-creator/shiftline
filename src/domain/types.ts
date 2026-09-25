@@ -43,12 +43,12 @@ export interface ShiftCode {
   /** A non-working status (leave, training) rather than a worked shift. */
   isStatus?: boolean;
   /**
-   * Which roster this code belongs to, as a `RosterMonth.id`
-   * (`${lineId}:${year}-${month}`).
+   * The `Line.id` that owns this code.
    *
-   * Undefined means a standard code available everywhere. Codes invented by
-   * an Excel import are scoped to the month they came from, so a one-off code
-   * on one sheet does not turn up on the brush of every other month.
+   * Every line keeps its own set, so changing Night's minimum on one line
+   * leaves the others alone and a code an import invents for one line never
+   * appears on another. Undefined marks the starter set that new lines are
+   * copied from; those rows are a template and are never shown on a grid.
    */
   scope?: string;
   order: number;

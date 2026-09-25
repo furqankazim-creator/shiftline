@@ -4,7 +4,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { DEFAULT_SETTINGS, codeKey, db, ensureSeeded, newId, patchSettings, type Settings } from '@/data/db';
+import { DEFAULT_SETTINGS, codeKey, db, ensureSeeded, newId, patchSettings, seedCodesForLine, type Settings } from '@/data/db';
 import { buildColumns, daysInMonth, monthKey, shiftMonth } from '@/domain/calendar';
 import {
   generateMonth, rosterId, setCell as setCellPure, setRange as setRangePure,
@@ -22,8 +22,10 @@ interface RosterStore {
   settings: Settings;
   lines: Line[];
   codes: ShiftCode[];
-  /** Every code in the database, including ones scoped to other months. */
+  /** Every code in the database, across all lines. */
   allCodes: ShiftCode[];
+  /** Every code the active line owns, used or not. */
+  lineCodes: ShiftCode[];
   /** Adds a code to this month's brush without touching any other month. */
   enableCode(codeId: string): Promise<void>;
   employees: Employee[];
@@ -137,9 +139,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     }
     return allCodes
-      .filter((c) => c.scope === id || (!c.scope && used.has(c.id)))
+      .filter((c) => c.scope === activeLineId && used.has(c.id))
       .sort((a, b) => a.order - b.order);
-  }, [allCodes, roster, id, extraCodes.join(',')]);
+  }, [allCodes, roster, activeLineId, extraCodes.join(',')]);
+
+  /** Every code this line owns — what Setup edits and the "+" picker offers. */
+  const lineCodes = useMemo(
+    () => allCodes.filter((c) => c.scope === activeLineId).sort((a, b) => a.order - b.order),
+    [allCodes, activeLineId],
+  );
 
   /**
    * Switches an existing code on for this month's brush. It is recorded
@@ -433,12 +441,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveLine = useCallback(async (line: Line) => {
+    const isNew = !(await db.lines.get(line.id));
     await db.lines.put(line);
+    // A new line starts with its own copy of the standard codes, so editing
+    // them never reaches another line.
+    if (isNew) await seedCodesForLine(line.id);
   }, []);
 
   const removeLine = useCallback(async (lineId: string) => {
-    await db.transaction('rw', db.lines, db.employees, db.rosters, async () => {
+    await db.transaction('rw', db.lines, db.employees, db.rosters, db.shiftCodes, async () => {
       await db.lines.delete(lineId);
+      await db.shiftCodes.where('scope').equals(lineId).delete();
       await db.employees.where('lineId').equals(lineId).delete();
       await db.rosters.where('lineId').equals(lineId).delete();
     });
@@ -458,6 +471,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     lines,
     codes,
     allCodes,
+    lineCodes,
     enableCode,
     employees,
     leave: lineLeave,
