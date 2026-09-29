@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { useStore } from '@/app/store';
-import { toneVars } from '@/app/tones';
+import { codeVars } from '@/app/tones';
 import { Button, Modal, useToast } from '@/components/ui';
 import { monthLabel, shiftMonth } from '@/domain/calendar';
 
@@ -107,7 +107,7 @@ export function RotateModal({ open, onClose }: { open: boolean; onClose: () => v
                     <div className="flex items-center gap-1.5">
                       <span
                         className="h-1.5 w-1.5 rounded-full"
-                        style={{ background: toneVars(code.tone).accent }}
+                        style={{ background: codeVars(code).accent }}
                       />
                       <span className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-3">
                         {code.label}
@@ -173,7 +173,7 @@ export function RotateModal({ open, onClose }: { open: boolean; onClose: () => v
   );
 
   function Pill({ code, label }: { code: string; label?: string }) {
-    const tone = toneVars(codeById.get(code)?.tone ?? 'off');
+    const tone = codeVars(codeById.get(code));
     return (
       <span
         title={label}

@@ -271,3 +271,29 @@ select option:checked {
     display: none !important;
   }
 }
+
+/* ---------------------------------------------------- theme switch animation */
+/* The circular reveal is driven from JS (app/themeTransition.ts); these turn
+   off the browser's default cross-fade so only the circle is seen. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-new(root) {
+  z-index: 1;
+}
+
+/* Fallback for browsers without view transitions: ease every colour. */
+.theme-fading,
+.theme-fading *,
+.theme-fading *::before,
+.theme-fading *::after {
+  transition:
+    background-color 600ms ease,
+    color 600ms ease,
+    border-color 600ms ease,
+    fill 600ms ease,
+    stroke 600ms ease,
+    box-shadow 600ms ease !important;
+}

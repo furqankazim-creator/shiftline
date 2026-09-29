@@ -29,8 +29,16 @@ export interface ShiftCode {
   label: string;
   /** Free-text timing shown in the legend, e.g. "06:00 – 15:00". */
   timing: string;
-  /** Palette key driving the cell colour. */
+  /**
+   * Palette key: the cell colour, and the shift family a code belongs to
+   * (Morning, Night …) for headcount totals and rotation.
+   */
   tone: ShiftTone;
+  /**
+   * Optional own colour, "#RRGGBB", drawn instead of the tone's palette so
+   * codes sharing a family can still be told apart. The tone keeps its role.
+   */
+  color?: string;
   /** Minimum people required on this shift every working day. */
   minHeadcount: number;
   /**
@@ -135,6 +143,11 @@ export interface RosterMonth {
   cells: Record<string, Cell[]>;
   /** Hand edits, kept separate so regenerating never destroys them. */
   overrides: Record<string, Record<number, string>>; // empId -> dayIndex -> code
+  /**
+   * Hours worked on top of a day's shift, entered by hand. They count towards
+   * overtime (see `domain/hours.ts`) and, like overrides, survive a regenerate.
+   */
+  extraHours?: Record<string, Record<number, number>>; // empId -> dayIndex -> hours
   updatedAt: number;
 }
 

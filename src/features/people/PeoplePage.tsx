@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { useStore } from '@/app/store';
-import { toneVars } from '@/app/tones';
+import { codeVars } from '@/app/tones';
 import { Button, Field, Input, Modal, Select, Switch, cx, useToast } from '@/components/ui';
 import { newId } from '@/data/db';
 import { WEEKDAY_LABELS, daysInMonth, monthKey, monthLabel } from '@/domain/calendar';
@@ -76,7 +76,7 @@ export function PeoplePage() {
           <div className="divide-y divide-[var(--line)]">
             {employees.map((employee) => {
               const code = codes.find((c) => c.id === employee.defaultShift);
-              const tone = toneVars(code?.tone ?? 'off');
+              const tone = codeVars(code);
               const rotations = employee.rotations?.[monthKey(settings.activeYear, settings.activeMonth)] ?? [];
 
               return (

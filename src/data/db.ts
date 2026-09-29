@@ -26,6 +26,8 @@ export interface Settings {
   /** Weekday columns tinted as the weekend. The client runs Fri/Sat. */
   weekendDays: number[];
   maxConsecutive: number;
+  /** A standard working day. Hours past this, or on a rest day, are overtime. */
+  standardHours: number;
   seeded: boolean;
   zoomLevel: number;
   fontSize: FontSize;
@@ -48,6 +50,7 @@ export const DEFAULT_SETTINGS: Settings = {
   activeMonth: 9,
   weekendDays: [5, 6],
   maxConsecutive: 6,
+  standardHours: 9,
   seeded: false,
   zoomLevel: 100,
   fontSize: 'normal',

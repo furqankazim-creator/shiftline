@@ -1,7 +1,8 @@
 import XLSX from 'xlsx-js-style';
 
-import { EXPORT_COLORS } from '@/app/tones';
+import { exportColors } from '@/app/tones';
 import { MONTH_ABBR, buildColumns, daysInMonth } from '@/domain/calendar';
+import { DEFAULT_STANDARD_HOURS, employeeHours } from '@/domain/hours';
 import { OFF, type Employee, type Line, type RosterMonth, type SheetLayout, type ShiftCode } from '@/domain/types';
 
 type Cell = XLSX.CellObject & { s?: Record<string, unknown> };
@@ -25,6 +26,8 @@ export interface ExportInput {
   employees: Employee[];
   codes: ShiftCode[];
   line: Line;
+  /** A standard working day, for the Hours / OT columns. Defaults to 9. */
+  standardHours?: number;
 }
 
 /**
@@ -39,16 +42,23 @@ export interface ExportInput {
  * duplicated conditional-formatting rules, which is why it opens slowly. This
  * writes static fills instead, so the output is a fraction of the size.
  */
-export function buildWorkbook({ roster, employees, codes, line }: ExportInput): XLSX.WorkBook {
+export function buildWorkbook({
+  roster, employees, codes, line, standardHours = DEFAULT_STANDARD_HOURS,
+}: ExportInput): XLSX.WorkBook {
   const { year, month } = roster;
   const nDays = daysInMonth(year, month);
   const columns = buildColumns(year, month);
   const codeById = new Map(codes.map((c) => [c.id, c]));
+  const hours = employeeHours({ roster, employees, codes, standardHours });
 
   const FIRST_DATA_COL = 2; // column C
   const HEADER_ROWS = 3;
   const firstEmpRow = HEADER_ROWS; // 0-based row index of the first employee
   const lastEmpRow = firstEmpRow + employees.length - 1;
+  // Month totals sit straight after the last day; the legend moves right of them.
+  const HOURS_COL = FIRST_DATA_COL + nDays;
+  const OT_COL = HOURS_COL + 1;
+  const LEGEND_COL = OT_COL + 2;
 
   const cells: Record<string, Cell> = {};
   const put = (r: number, c: number, cell: Cell) => {
@@ -70,9 +80,9 @@ export function buildWorkbook({ roster, employees, codes, line }: ExportInput): 
     .filter((c) => !c.isStatus)
     .map((c) => `${c.id} — ${c.label}: ${c.timing}`)
     .join('\n');
-  put(0, FIRST_DATA_COL + nDays + 1, {
+  put(0, LEGEND_COL, {
     t: 's',
-    v: `SHIFT TIMINGS\n\n${legend}`,
+    v: `SHIFT TIMINGS\n\n${legend}\n\nOT = hours past ${standardHours} a day, plus any shift worked on a rest day`,
     s: {
       font: { sz: 10, color: { rgb: 'FF44506B' } },
       alignment: { vertical: 'top', wrapText: true },
@@ -119,6 +129,8 @@ export function buildWorkbook({ roster, employees, codes, line }: ExportInput): 
   for (const col of columns) {
     put(2, FIRST_DATA_COL + col.index, { t: 'n', v: col.day, s: headStyle });
   }
+  put(2, HOURS_COL, { t: 's', v: 'Hours', s: headStyle });
+  put(2, OT_COL, { t: 's', v: 'OT', s: headStyle });
 
   // ---- employee rows ----------------------------------------------------
   employees.forEach((employee, i) => {
@@ -138,7 +150,7 @@ export function buildWorkbook({ roster, employees, codes, line }: ExportInput): 
     for (const col of columns) {
       const code = row[col.index]?.code ?? OFF;
       const def = codeById.get(code);
-      const palette = EXPORT_COLORS[def?.tone ?? 'off'];
+      const palette = exportColors(def);
 
       put(r, FIRST_DATA_COL + col.index, {
         t: 's',
@@ -151,6 +163,16 @@ export function buildWorkbook({ roster, employees, codes, line }: ExportInput): 
         },
       });
     }
+
+    const h = hours[employee.id];
+    const totalStyle = (bold: boolean) => ({
+      font: { bold, sz: 10, color: { rgb: bold ? 'FFB45F06' : 'FF1B2333' } },
+      alignment: { horizontal: 'center', vertical: 'center' },
+      fill: { patternType: 'solid', fgColor: { rgb: 'FFF5F7FA' } },
+      border: BORDER,
+    });
+    put(r, HOURS_COL, { t: 'n', v: h?.worked ?? 0, s: totalStyle(false) });
+    put(r, OT_COL, { t: 'n', v: h?.overtime ?? 0, s: totalStyle((h?.overtime ?? 0) > 0) });
   });
 
   // ---- weekday repeat row ----------------------------------------------
@@ -224,7 +246,7 @@ export function buildWorkbook({ roster, employees, codes, line }: ExportInput): 
   });
 
   const lastRow = repeatRow + summaryRows.length + 2;
-  const lastCol = FIRST_DATA_COL + nDays + 1;
+  const lastCol = LEGEND_COL;
 
   const sheet: XLSX.WorkSheet = {
     ...cells,
@@ -242,6 +264,8 @@ export function buildWorkbook({ roster, employees, codes, line }: ExportInput): 
       { wch: 24 },
       { wch: 12 },
       ...columns.map(() => ({ wch: 4.2 })),
+      { wch: 7 },
+      { wch: 6 },
       { wch: 3 },
       { wch: 30 },
     ],
@@ -379,10 +403,13 @@ function mkCellStyle(rgb: string, bold = false, align = 'center'): Record<string
  *   Then employee rows grouped into sections (PIC Morning, MP Morning, …)
  *   with a headcount row after each section.
  */
-export function buildOperationalWorkbook({ roster, employees, codes, line }: ExportInput): XLSX.WorkBook {
+export function buildOperationalWorkbook({
+  roster, employees, codes, line, standardHours = DEFAULT_STANDARD_HOURS,
+}: ExportInput): XLSX.WorkBook {
   const { year, month } = roster;
   const nDays = daysInMonth(year, month);
   const codeById = new Map(codes.map((c) => [c.id, c]));
+  const hours = employeeHours({ roster, employees, codes, standardHours });
 
   // ---- group employees into ordered sections -----------------------------
   const sectionOrder: string[] = [];
@@ -398,7 +425,9 @@ export function buildOperationalWorkbook({ roster, employees, codes, line }: Exp
   const merges: XLSX.Range[] = [];
   let rowIdx = 0;
 
-  const nCols = 4 + nDays;
+  // Employee | Role | Shift | Total Hours | Total OT | one column per day
+  const FIRST_DAY_COL = 5;
+  const nCols = FIRST_DAY_COL + nDays;
 
   const set = (r: number, c: number, cell: OCell) => { ws[XLSX.utils.encode_cell({ r, c })] = cell; };
 
@@ -414,9 +443,10 @@ export function buildOperationalWorkbook({ roster, employees, codes, line }: Exp
   set(rowIdx, 0, oc('Employee', 's', hdrStyle));
   set(rowIdx, 1, oc('Role', 's', hdrStyle));
   set(rowIdx, 2, oc('Shift', 's', hdrStyle));
-  set(rowIdx, 3, oc('Total OT', 's', hdrStyle));
+  set(rowIdx, 3, oc('Total Hours', 's', hdrStyle));
+  set(rowIdx, 4, oc(`Total OT (>${standardHours}h/day)`, 's', hdrStyle));
   for (let d = 1; d <= nDays; d++) {
-    set(rowIdx, 3 + d, oc(opDateHeader(year, month, d), 's', mkHeaderStyle('2E4057')));
+    set(rowIdx, FIRST_DAY_COL + d - 1, oc(opDateHeader(year, month, d), 's', mkHeaderStyle('2E4057')));
   }
   rowIdx++;
 
@@ -445,37 +475,26 @@ export function buildOperationalWorkbook({ roster, employees, codes, line }: Exp
       set(rowIdx, 1, oc(emp.role ?? '', 's', mkCellStyle(rowBg, false, 'center')));
       set(rowIdx, 2, oc(shiftLabel(emp.defaultShift), 's', mkCellStyle(rowBg, false, 'center')));
 
-      let workedHours = 0;
+      const extras = roster.extraHours?.[emp.id] ?? {};
       for (let d = 0; d < nDays; d++) {
         const code = overrides[d] ?? cells[d]?.code ?? OFF;
         const isOff = code === OFF || code === '-';
         const isLeave = code === 'LV' || code === 'FLRT';
-        const cellText = opShiftText(code, codeById);
+        const extra = extras[d] ?? 0;
+        const cellText = opShiftText(code, codeById) + (extra > 0 && !isLeave ? ` | +${extra}H extra` : '');
         const bg = isOff ? 'FFFFFF' : isLeave ? 'FFE6E6' : rowBg;
-        set(rowIdx, 4 + d, oc(cellText, 's', mkCellStyle(bg, false, 'center')));
-
-        if (!isOff && !isLeave) {
-          const def = codeById.get(code);
-          const timing = def?.timing ?? '';
-          const tm = timing.match(/(\d{1,2}):(\d{2})\s*[–\-]\s*(\d{1,2}):(\d{2})/);
-          if (tm) {
-            const s2 = Number(tm[1]) * 60 + Number(tm[2]);
-            let e2 = Number(tm[3]) * 60 + Number(tm[4]);
-            if (e2 < s2) e2 += 24 * 60;
-            workedHours += (e2 - s2) / 60;
-          } else {
-            workedHours += 11;
-          }
-        }
+        set(rowIdx, FIRST_DAY_COL + d, oc(cellText, 's', mkCellStyle(bg, false, 'center')));
       }
-      set(rowIdx, 3, oc(Math.round(workedHours), 'n', mkCellStyle(rowBg, false, 'center')));
+      const h = hours[emp.id];
+      set(rowIdx, 3, oc(h?.worked ?? 0, 'n', mkCellStyle(rowBg, false, 'center')));
+      set(rowIdx, 4, oc(h?.overtime ?? 0, 'n', mkCellStyle(rowBg, (h?.overtime ?? 0) > 0, 'center')));
       rowIdx++;
     }
 
     // Count row
     const countBg = colors.count;
     set(rowIdx, 0, oc(`${sRole} ${sShift} working count`, 's', mkCellStyle(countBg, true, 'left')));
-    for (let c = 1; c < 4; c++) set(rowIdx, c, oc('', 's', mkCellStyle(countBg)));
+    for (let c = 1; c < FIRST_DAY_COL; c++) set(rowIdx, c, oc('', 's', mkCellStyle(countBg)));
     for (let d = 0; d < nDays; d++) {
       const count = emps.filter((emp) => {
         const cells = roster.cells[emp.id] ?? [];
@@ -483,7 +502,7 @@ export function buildOperationalWorkbook({ roster, employees, codes, line }: Exp
         const code = overrides[d] ?? cells[d]?.code ?? OFF;
         return code !== OFF && code !== '-' && code !== 'LV' && code !== 'FLRT';
       }).length;
-      set(rowIdx, 4 + d, oc(count > 0 ? count : '', count > 0 ? 'n' : 's', mkCellStyle(countBg, true, 'center')));
+      set(rowIdx, FIRST_DAY_COL + d, oc(count > 0 ? count : '', count > 0 ? 'n' : 's', mkCellStyle(countBg, true, 'center')));
     }
     rowIdx++;
     rowIdx++; // blank separator
@@ -495,6 +514,7 @@ export function buildOperationalWorkbook({ roster, employees, codes, line }: Exp
     { wch: 6  },
     { wch: 9  },
     { wch: 8  },
+    { wch: 10 },
     ...Array.from({ length: nDays }, () => ({ wch: 22 })),
   ];
   ws['!rows'] = [{ hpt: 20 }, { hpt: 40 }];
@@ -580,7 +600,12 @@ export function buildBackupWorkbook(data: BackupData, active?: ActiveRosterHint)
       const emps = data.employees.filter((e) => e.lineId === r.lineId);
       // Skip rosters where no real employees exist for this line
       if (emps.length === 0) continue;
-      const rosterWb = buildWorkbook({ roster: r, employees: emps, codes: data.codes, line });
+      // Each line's own codes: an unscoped template code may share a token with it.
+      const lineCodes = data.codes.filter((c) => c.scope === r.lineId);
+      const rosterWb = buildWorkbook({
+        roster: r, employees: emps, codes: lineCodes.length ? lineCodes : data.codes, line,
+        standardHours: (data.settings as { standardHours?: number } | undefined)?.standardHours,
+      });
       const firstSheetName = rosterWb.SheetNames[0];
       if (firstSheetName && rosterWb.Sheets[firstSheetName]) {
         XLSX.utils.book_append_sheet(wb, rosterWb.Sheets[firstSheetName], firstSheetName);
@@ -610,6 +635,7 @@ export function buildBackupWorkbook(data: BackupData, active?: ActiveRosterHint)
     'Code': c.id,
     'Shift Label': c.label,
     'Timing': c.timing,
+    'Colour': c.color ?? c.tone,
     'Min Headcount': c.minHeadcount,
     'Counts As Engineer': c.countsAsEngineer ? 'Yes' : 'No',
     'Rotates': c.rotates ? 'Yes' : 'No',
@@ -691,11 +717,18 @@ export function downloadBackupXlsx(data: BackupData, active?: ActiveRosterHint):
  * Only the shift letters inside the grid are ours, coloured by code.
  */
 export function buildFromLayout(
-  { roster, employees, codes }: Omit<ExportInput, 'line'>,
+  { roster, employees, codes, standardHours = DEFAULT_STANDARD_HOURS }: Omit<ExportInput, 'line'>,
   layout: SheetLayout,
 ): XLSX.WorkBook {
   const nDays = daysInMonth(roster.year, roster.month);
   const byId = new Map(codes.map((c) => [c.id, c]));
+  const hours = employeeHours({ roster, employees, codes, standardHours });
+  // Their own "OT" / "Total Hours" columns are refilled from the roster
+  // rather than copied, so they always match the shifts written beside them.
+  const otCol = layout.otherCols.find((c) => /\bO\.?T\b|over\s*time/i.test(c.header))?.col;
+  const hoursCol = layout.otherCols.find(
+    (c) => c.col !== otCol && /\b(total\s*)?(hours|hrs)\b/i.test(c.header),
+  )?.col;
   const sheet: Record<string, Cell | unknown> = {};
   let maxRow = layout.headerRow;
   let maxCol = layout.nameCol;
@@ -737,9 +770,10 @@ export function buildFromLayout(
       s: { font: { sz: 10 }, alignment: { horizontal: 'left' }, border: BORDER },
     });
     // Their own columns (role, contact, OT …) travel with the person.
+    const h = hours[emp.id];
     for (const { col } of layout.otherCols) {
       if (col === layout.nameCol) continue;
-      const v = extras[col];
+      const v = col === otCol ? h?.overtime ?? 0 : col === hoursCol ? h?.worked ?? 0 : extras[col];
       if (v === undefined) continue;
       put(r, col, typeof v === 'number'
         ? { t: 'n', v, s: { font: { sz: 10 }, alignment: { horizontal: 'center' }, border: BORDER } }
@@ -750,8 +784,7 @@ export function buildFromLayout(
     for (const { day, col } of layout.dayCols) {
       if (day > nDays) continue;
       const code = row[day - 1]?.code ?? OFF;
-      const tone = byId.get(code)?.tone ?? 'off';
-      const colour = EXPORT_COLORS[tone];
+      const colour = exportColors(byId.get(code));
       put(r, col, {
         t: 's',
         v: code === OFF ? '' : code,

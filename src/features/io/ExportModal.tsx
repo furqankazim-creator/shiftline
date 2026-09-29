@@ -24,11 +24,11 @@ export function ExportModal({ open, onClose }: { open: boolean; onClose: () => v
       ? [{
           key: 'original',
           title: `Original imported format (${stored.layout.sheetName})`,
-          body: 'Writes this month back into the workbook you imported — same title, same header position, your own extra columns kept, day headers spelled the same way. Only the shift letters are updated.',
+          body: 'Writes this month back into the workbook you imported — same title, same header position, your own extra columns kept, day headers spelled the same way. Only the shift letters are updated, and an OT or Total Hours column of yours is refilled from the roster.',
           action: async () => {
             if (!roster) return;
             const { downloadFromLayout } = await import('@/io/exportXlsx');
-            const filename = downloadFromLayout({ roster, employees, codes }, stored.layout);
+            const filename = downloadFromLayout({ roster, employees, codes, standardHours: settings.standardHours }, stored.layout);
             toast(`Saved ${filename}`, 'ok');
             onClose();
           },
@@ -37,11 +37,11 @@ export function ExportModal({ open, onClose }: { open: boolean; onClose: () => v
     {
       key: 'operational',
       title: 'Operational roster layout',
-      body: 'Sections by role and shift (PIC Morning, MP Night…), date headers, verbose shift timings and count rows.',
+      body: 'Sections by role and shift (PIC Morning, MP Night…), date headers, verbose shift timings, Total Hours and Total OT per person, and count rows.',
       action: async () => {
         if (!roster || !line) return;
         const { downloadOperationalXlsx } = await import('@/io/exportXlsx');
-        const filename = downloadOperationalXlsx({ roster, employees, codes, line });
+        const filename = downloadOperationalXlsx({ roster, employees, codes, line, standardHours: settings.standardHours });
         toast(`Saved ${filename}`, 'ok');
         onClose();
       },
@@ -49,12 +49,12 @@ export function ExportModal({ open, onClose }: { open: boolean; onClose: () => v
     {
       key: 'xlsx',
       title: 'Standard Excel workbook',
-      body: 'Your layout, with colour-filled shift codes and live COUNTIF headcount rows — the file you send to management.',
+      body: 'Your layout, with colour-filled shift codes and live COUNTIF headcount rows, plus Hours and OT per person — the file you send to management.',
       action: async () => {
         if (!roster || !line) return;
         // The workbook writer is large; pull it in only when exporting.
         const { downloadXlsx } = await import('@/io/exportXlsx');
-        const filename = downloadXlsx({ roster, employees, codes, line });
+        const filename = downloadXlsx({ roster, employees, codes, line, standardHours: settings.standardHours });
         toast(`Saved ${filename}`, 'ok');
         onClose();
       },

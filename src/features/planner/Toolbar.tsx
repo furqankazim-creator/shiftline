@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { useStore } from '@/app/store';
 import { useViewport } from '@/app/useViewport';
-import { toneVars } from '@/app/tones';
+import { codeVars, toneVars } from '@/app/tones';
 import { Button, Select, cx, useToast } from '@/components/ui';
 import { MONTH_NAMES } from '@/domain/calendar';
 import { OFF, type ShiftTone } from '@/domain/types';
@@ -344,7 +344,7 @@ export function Toolbar({
         />
 
         {codes.map((code) => {
-          const tone = toneVars(code.tone);
+          const tone = codeVars(code);
           return (
             <BrushChip
               key={code.id}
@@ -435,7 +435,7 @@ function AddCodeChip({
           </p>
           <div className="max-h-64 overflow-y-auto">
             {available.map((c) => {
-              const tone = toneVars(c.tone);
+              const tone = codeVars(c);
               return (
                 <button
                   key={c.id}

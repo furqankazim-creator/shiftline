@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 
 import { useStore } from '@/app/store';
-import { toneVars } from '@/app/tones';
+import { codeVars } from '@/app/tones';
 import { Button, Modal, Select, Switch, cx } from '@/components/ui';
 import { codeKey, db, newId } from '@/data/db';
 import { MONTH_NAMES, WEEKDAY_LABELS } from '@/domain/calendar';
@@ -324,7 +324,7 @@ export function ImportModal({
               </div>
               <div className="max-h-[240px] overflow-y-auto divide-y divide-[var(--line)]">
                 {result.employees.map((row, i) => {
-                  const tone = toneVars(codeById.get(row.defaultShift)?.tone ?? 'off');
+                  const tone = codeVars(codeById.get(row.defaultShift));
                   return (
                     <div
                       key={i}
@@ -373,7 +373,7 @@ export function ImportModal({
                       </td>
                       {row.codes.map((code, j) => {
                         const def = codeById.get(code);
-                        const tone = toneVars(def?.tone ?? 'off');
+                        const tone = codeVars(def);
                         return (
                           <td
                             key={j}

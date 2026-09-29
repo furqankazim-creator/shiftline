@@ -5,7 +5,7 @@ import {
   askAssistant, cloudEnabled, getUser, health, signIn, type AiAction, type AiReply, type CloudUser,
 } from '@/app/api';
 import { useStore } from '@/app/store';
-import { toneVars } from '@/app/tones';
+import { codeVars } from '@/app/tones';
 import { useViewport } from '@/app/useViewport';
 import { Button, cx, useToast } from '@/components/ui';
 
@@ -269,7 +269,7 @@ function Chat({ onClose }: { onClose: () => void }) {
                     </div>
                     <div className="flex flex-col gap-1">
                       {turn.reply.actions.map((a, j) => {
-                        const tone = toneVars(codeById.get(a.code)?.tone ?? 'off');
+                        const tone = codeVars(codeById.get(a.code));
                         return (
                           <div key={j} className="flex items-center gap-2 text-[12px]">
                             <span className="rounded px-1.5 py-0.5 font-mono text-[11px] font-bold shrink-0" style={{ background: tone.bg, color: tone.fg }}>

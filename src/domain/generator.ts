@@ -9,6 +9,8 @@ export interface GenerateInput {
   leaveBlocks?: LeaveBlock[];
   /** Hand edits to preserve: empId -> dayIndex -> code. */
   overrides?: Record<string, Record<number, string>>;
+  /** Extra hours to carry over unchanged: empId -> dayIndex -> hours. */
+  extraHours?: Record<string, Record<number, number>>;
   /** When false, a regenerate wipes hand edits and rebuilds purely from rules. */
   respectOverrides?: boolean;
   /** When false, leave blocks are ignored (used by "what-if" previews). */
@@ -37,6 +39,7 @@ export function generateMonth(input: GenerateInput): RosterMonth {
     employees,
     leaveBlocks = [],
     overrides = {},
+    extraHours = {},
     respectOverrides = true,
     respectLeave = true,
   } = input;
@@ -100,6 +103,7 @@ export function generateMonth(input: GenerateInput): RosterMonth {
     month,
     cells,
     overrides: respectOverrides ? overrides : {},
+    extraHours: respectOverrides ? extraHours : {},
     updatedAt: Date.now(),
   };
 }
@@ -128,6 +132,24 @@ export function setCell(
       ...roster.overrides,
       [employeeId]: { ...(roster.overrides[employeeId] ?? {}), [dayIndex]: code },
     },
+    updatedAt: Date.now(),
+  };
+}
+
+/** Records hours worked on top of a day's shift; 0 clears them. */
+export function setExtraHours(
+  roster: RosterMonth,
+  employeeId: string,
+  dayIndex: number,
+  hours: number,
+): RosterMonth {
+  const row = { ...(roster.extraHours?.[employeeId] ?? {}) };
+  if (hours > 0) row[dayIndex] = hours;
+  else delete row[dayIndex];
+
+  return {
+    ...roster,
+    extraHours: { ...(roster.extraHours ?? {}), [employeeId]: row },
     updatedAt: Date.now(),
   };
 }

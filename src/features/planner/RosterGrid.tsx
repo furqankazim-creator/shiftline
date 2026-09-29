@@ -3,9 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useStore } from '@/app/store';
 import { useViewport } from '@/app/useViewport';
-import { toneVars } from '@/app/tones';
+import { codeVars } from '@/app/tones';
 import { cx } from '@/components/ui';
 import { todayIndex } from '@/domain/calendar';
+import { formatHours } from '@/domain/hours';
 import { OFF, type Issue, type ShiftCode } from '@/domain/types';
 
 import { CellPicker } from './CellPicker';
@@ -40,7 +41,8 @@ interface Props {
 
 export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
   const {
-    roster, employees, codes, columns, days, issues, settings, paintCell, paintRange,
+    roster, employees, codes, columns, days, issues, settings, hours, paintCell, paintRange,
+    setExtraHours,
   } = useStore();
   const viewport = useViewport();
   const zoom = (settings.zoomLevel ?? 100) / 100;
@@ -48,6 +50,8 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
   const NAME_COL = Math.round(base.name * zoom);
   const CELL_W = Math.round(base.cell * zoom);
   const CELL_H = Math.round(base.row * zoom);
+  /** Width of each month-total column (Hrs, OT) pinned to the right edge. */
+  const TOTAL_W = Math.round(50 * zoom);
   const showContact = viewport === 'desktop';
 
   const [focus, setFocus] = useState<Focus | null>(null);
@@ -201,7 +205,8 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
     );
   }
 
-  const gridWidth = NAME_COL + columns.length * CELL_W;
+  const gridWidth = NAME_COL + columns.length * CELL_W + 2 * TOTAL_W;
+  const standard = settings.standardHours ?? 9;
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
@@ -267,11 +272,25 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
                 </div>
               );
             })}
+            <TotalHeader
+              label="Hrs"
+              right={TOTAL_W}
+              width={TOTAL_W}
+              title="Hours worked this month: shift hours plus any extra hours"
+            />
+            <TotalHeader
+              label="OT"
+              right={0}
+              width={TOTAL_W}
+              title={`Overtime: hours past ${standard} a day, plus every hour of a shift worked on a rest day`}
+            />
           </div>
 
           {/* ------------------------------------------------------- rows */}
           {employees.map((employee, rowIndex) => {
             const row = roster.cells[employee.id] ?? [];
+            const empHours = hours[employee.id];
+            const extras = roster.extraHours?.[employee.id] ?? {};
             return (
               <div key={employee.id} className="flex border-b border-[var(--line)] group">
                 <div
@@ -280,7 +299,7 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
                 >
                   <span
                     className="h-4 w-[3px] rounded-full shrink-0"
-                    style={{ background: toneVars(codeById.get(employee.defaultShift)?.tone ?? 'off').accent }}
+                    style={{ background: codeVars(codeById.get(employee.defaultShift)).accent }}
                   />
                   <span
                     className={cx('truncate font-medium', viewport === 'mobile' ? 'text-[11.5px]' : 'text-[12.5px]')}
@@ -303,9 +322,12 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
                   const code = cell?.code ?? OFF;
                   const def = codeById.get(code);
                   const isOff = code === OFF;
-                  const tone = toneVars(def?.tone ?? 'off');
+                  const tone = codeVars(def);
                   const issue = issueMap.get(`${employee.id}:${col.index}`);
                   const focused = focus?.employeeId === employee.id && focus.dayIndex === col.index;
+                  // Hours left on a cell that later became off or leave don't count.
+                  const extra = isOff || def?.isStatus ? 0 : extras[col.index] ?? 0;
+                  const dayHours = empHours?.days[col.index];
                   const inDrag =
                     dragPreview?.employeeId === employee.id &&
                     col.index >= Math.min(dragPreview.from, dragPreview.to) &&
@@ -339,13 +361,37 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
                         background: def?.isStatus ? undefined : tone.bg,
                         color: tone.fg,
                       }}
-                      title={
+                      title={[
                         issue
                           ? issue.message
-                          : `${employee.name} · ${col.label} ${col.day} · ${def?.label ?? 'Off'}`
-                      }
+                          : `${employee.name} · ${col.label} ${col.day} · ${def?.label ?? 'Off'}`,
+                        dayHours && dayHours.worked > 0
+                          ? `${formatHours(dayHours.worked)}h worked${extra ? ` (incl. +${formatHours(extra)}h extra)` : ''}`
+                          : null,
+                        dayHours && dayHours.overtime > 0
+                          ? `OT ${formatHours(dayHours.overtime)}h${dayHours.extraDuty ? ' — extra duty on a rest day' : ''}`
+                          : null,
+                      ].filter(Boolean).join(' · ')}
                     >
                       {isOff ? <span className="opacity-45">·</span> : code}
+
+                      {/* extra hours entered on top of the shift */}
+                      {extra > 0 && (
+                        <span
+                          className="pointer-events-none absolute left-[2px] top-[1px] font-mono font-bold leading-none"
+                          style={{ fontSize: `${Math.max(7, Math.round(8 * zoom))}px`, color: 'var(--warn)' }}
+                        >
+                          +{formatHours(extra)}
+                        </span>
+                      )}
+
+                      {/* any overtime on this day gets an underline */}
+                      {dayHours && dayHours.overtime > 0 && (
+                        <span
+                          className="pointer-events-none absolute inset-x-[3px] bottom-[2px] h-[2px] rounded-full"
+                          style={{ background: 'var(--warn)' }}
+                        />
+                      )}
 
                       {/* a hand edit gets a corner tick so he can see what he changed */}
                       {cell?.source === 'manual' && (
@@ -378,6 +424,26 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
                     </motion.button>
                   );
                 })}
+
+                <TotalCell right={TOTAL_W} width={TOTAL_W} height={CELL_H} zoom={zoom}>
+                  {empHours ? formatHours(empHours.worked) : '·'}
+                </TotalCell>
+                <TotalCell
+                  right={0}
+                  width={TOTAL_W}
+                  height={CELL_H}
+                  zoom={zoom}
+                  highlight={!!empHours && empHours.overtime > 0}
+                  title={
+                    empHours && empHours.overtime > 0
+                      ? `${formatHours(empHours.overtime)}h overtime` +
+                        (empHours.extraDutyDays ? ` · ${empHours.extraDutyDays} extra-duty day(s)` : '') +
+                        (empHours.extra ? ` · ${formatHours(empHours.extra)}h extra entered` : '')
+                      : 'No overtime this month'
+                  }
+                >
+                  {empHours ? formatHours(empHours.overtime) : '·'}
+                </TotalCell>
               </div>
             );
           })}
@@ -398,6 +464,7 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
         nameWidth={NAME_COL}
         cellWidth={CELL_W}
         gridWidth={gridWidth}
+        totalsWidth={2 * TOTAL_W}
         revealKey={revealKey}
         scrollLeft={scrollLeft}
         issues={issues}
@@ -409,13 +476,59 @@ export function RosterGrid({ brush, revealKey, jumpTo }: Props) {
           x={picker.x}
           y={picker.y}
           current={roster.cells[picker.focus.employeeId]?.[picker.focus.dayIndex]?.code ?? OFF}
+          extra={roster.extraHours?.[picker.focus.employeeId]?.[picker.focus.dayIndex] ?? 0}
+          dayInfo={hours[picker.focus.employeeId]?.days[picker.focus.dayIndex]}
           onPick={(code) => {
             paintCell(picker.focus.employeeId, picker.focus.dayIndex, code);
             setPicker(null);
           }}
+          onExtra={(value) => setExtraHours(picker.focus.employeeId, picker.focus.dayIndex, value)}
           onClose={() => setPicker(null)}
         />
       )}
+    </div>
+  );
+}
+
+/** Header for a month-total column pinned to the grid's right edge. */
+function TotalHeader({ label, right, width, title }: { label: string; right: number; width: number; title: string }) {
+  return (
+    <div
+      className="sticky z-10 flex items-end justify-center pb-1.5 bg-[var(--canvas)] border-l border-[var(--line-strong)]"
+      style={{ right, width, minWidth: width }}
+      title={title}
+    >
+      <span className="text-[10.5px] font-semibold uppercase tracking-wider text-ink-2">{label}</span>
+    </div>
+  );
+}
+
+function TotalCell({
+  right, width, height, zoom, highlight, title, children,
+}: {
+  right: number;
+  width: number;
+  height: number;
+  zoom: number;
+  highlight?: boolean;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="sticky z-10 flex items-center justify-center font-mono bg-[var(--canvas)] group-hover:bg-[var(--surface)] border-l border-[var(--line-strong)] transition-colors"
+      style={{
+        right,
+        width,
+        minWidth: width,
+        height,
+        fontSize: `${Math.max(9, Math.round(11.5 * zoom))}px`,
+        color: highlight ? 'var(--warn)' : 'var(--ink-2)',
+        fontWeight: highlight ? 700 : 500,
+      }}
+      title={title}
+    >
+      {children}
     </div>
   );
 }
@@ -436,6 +549,7 @@ function SummaryRail({
   nameWidth,
   cellWidth,
   gridWidth,
+  totalsWidth,
   revealKey,
   scrollLeft,
   issues,
@@ -447,6 +561,8 @@ function SummaryRail({
   nameWidth: number;
   cellWidth: number;
   gridWidth: number;
+  /** The grid's pinned Hrs + OT columns, mirrored here so days line up. */
+  totalsWidth: number;
   revealKey: number;
   scrollLeft: number;
   issues: Issue[];
@@ -511,7 +627,7 @@ function SummaryRail({
         {!open && (
           <div className="flex items-center gap-4 px-3 overflow-x-auto">
             {codes.map((code) => {
-              const tone = toneVars(code.tone);
+              const tone = codeVars(code);
               const counts = days.map((d) => d.total[code.id] ?? 0);
               const lo = Math.min(...counts);
               const hi = Math.max(...counts);
@@ -544,10 +660,16 @@ function SummaryRail({
             transition={{ type: 'spring', stiffness: 380, damping: 36, mass: 0.8 }}
             className="overflow-hidden"
           >
-            <div className="overflow-hidden">
+            <div className="relative overflow-hidden">
+              {/* Covers the days that sit under the grid's pinned Hrs / OT columns. */}
+              <div
+                className="absolute inset-y-0 right-0 z-20 bg-[var(--surface)] border-l border-[var(--line-strong)]"
+                style={{ width: totalsWidth }}
+                aria-hidden
+              />
               <div style={{ width: gridWidth, transform: `translateX(-${scrollLeft}px)` }}>
                 {codes.map((code) => {
-                  const tone = toneVars(code.tone);
+                  const tone = codeVars(code);
                   return (
                     <div key={code.id} className="flex border-b border-[var(--line)] last:border-b-0">
                       <div

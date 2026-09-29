@@ -7,8 +7,10 @@ import {
 import { DEFAULT_SETTINGS, codeKey, db, ensureSeeded, newId, patchSettings, seedCodesForLine, type Settings } from '@/data/db';
 import { buildColumns, daysInMonth, monthKey, shiftMonth } from '@/domain/calendar';
 import {
-  generateMonth, rosterId, setCell as setCellPure, setRange as setRangePure,
+  generateMonth, rosterId, setCell as setCellPure, setExtraHours as setExtraHoursPure,
+  setRange as setRangePure,
 } from '@/domain/generator';
+import { employeeHours, type EmployeeHours } from '@/domain/hours';
 import { autoRotate, buildHistory, fairness, type AutoRotateResult } from '@/domain/rotation';
 import { summarise } from '@/domain/summary';
 import { OFF } from '@/domain/types';
@@ -35,6 +37,8 @@ interface RosterStore {
   days: ReturnType<typeof summarise>;
   issues: Issue[];
   fairnessRows: ReturnType<typeof fairness>;
+  /** Worked hours and overtime per employee id, for the active month. */
+  hours: Record<string, EmployeeHours>;
   canUndo: boolean;
   canRedo: boolean;
   saveStatus: 'saved' | 'saving';
@@ -51,6 +55,8 @@ interface RosterStore {
 
   paintCell(employeeId: string, dayIndex: number, code: string): void;
   paintRange(employeeId: string, from: number, to: number, code: string): void;
+  /** Hours worked on top of that day's shift; 0 clears them. */
+  setExtraHours(employeeId: string, dayIndex: number, hours: number): void;
   regenerate(options?: { respectOverrides?: boolean }): Promise<void>;
   applyRotation(result: AutoRotateResult, targetYear: number, targetMonth: number): Promise<void>;
   previewRotation(aggressiveness: number): AutoRotateResult;
@@ -179,6 +185,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const next = generateMonth({
         year: activeYear, month: activeMonth, lineId: activeLineId,
         employees, leaveBlocks: lineLeave, overrides: stored?.overrides ?? {},
+        extraHours: stored?.extraHours ?? {},
       });
       if (cancelled) return;
       undoStack.current = [];
@@ -268,6 +275,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [roster, employees, codes, lineLeave, nDays, settings.maxConsecutive],
   );
 
+  const hours = useMemo(
+    () =>
+      roster
+        ? employeeHours({ roster, employees, codes: lineCodes, standardHours: settings.standardHours })
+        : {},
+    [roster, employees, lineCodes, settings.standardHours],
+  );
+
   // ---- history for fairness + rotation ----------------------------------
   const pastRosters = useLiveQuery(
     () => db.rosters.where('lineId').equals(activeLineId).toArray(),
@@ -343,12 +358,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [roster, commit],
   );
 
+  const setExtraHours = useCallback(
+    (employeeId: string, dayIndex: number, value: number) => {
+      if (!roster) return;
+      commit(setExtraHoursPure(roster, employeeId, dayIndex, value));
+    },
+    [roster, commit],
+  );
+
   const regenerate = useCallback(
     async (options?: { respectOverrides?: boolean }) => {
       const next = generateMonth({
         year: activeYear, month: activeMonth, lineId: activeLineId,
         employees, leaveBlocks: lineLeave,
         overrides: options?.respectOverrides === false ? {} : roster?.overrides ?? {},
+        extraHours: roster?.extraHours ?? {},
         respectOverrides: options?.respectOverrides ?? true,
       });
       commit(next);
@@ -538,6 +562,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     days,
     issues,
     fairnessRows,
+    hours,
     canUndo: undoStack.current.length > 0,
     canRedo: redoStack.current.length > 0,
     saveStatus,
@@ -552,6 +577,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     paintCell,
     paintRange,
+    setExtraHours,
     regenerate,
     applyRotation,
     previewRotation,

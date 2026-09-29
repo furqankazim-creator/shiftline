@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { useStore } from '@/app/store';
-import { toneVars } from '@/app/tones';
+import { codeVars } from '@/app/tones';
 import { Button, Modal, Switch, useToast } from '@/components/ui';
 import { daysInMonth, monthLabel } from '@/domain/calendar';
 import { generateMonth } from '@/domain/generator';
@@ -135,7 +135,7 @@ export function GenerateModal({ open, onClose, onDone }: { open: boolean; onClos
               </div>
               <div className="flex flex-col gap-1.5">
                 {worked.map((code) => {
-                  const tone = toneVars(code.tone);
+                  const tone = codeVars(code);
                   const counts = preview.days.map((d) => d.total[code.id] ?? 0);
                   const peak = Math.max(1, ...counts);
                   return (

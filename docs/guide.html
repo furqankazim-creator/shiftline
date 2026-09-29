@@ -117,6 +117,7 @@
     <a href="#editing">Editing the grid</a>
     <a href="#insights">Using Insights</a>
     <a href="#checks">What it checks</a>
+    <a href="#hours">Hours &amp; overtime</a>
     <a href="#display">Display, save &amp; backups</a>
     <a href="#excel">Excel in and out</a>
     <a href="#data">Your data</a>
@@ -290,7 +291,7 @@
         <li><span class="status s-warn">Amber number</span> — that many warnings. Worth a look, but may be perfectly fine.</li>
         <li><span class="status s-yes">Clear</span> — nothing to fix.</li>
       </ul>
-      <p>Hover the button for a one-line explanation. Click it to open the panel, which has three tabs.</p>
+      <p>Hover the button for a one-line explanation. Click it to open the panel, which has four tabs: Issues, Coverage, Hours and Fairness. The Hours tab is described under <a href="#hours">Hours &amp; overtime</a>.</p>
       <div class="tabs">
         <div class="tab"><div class="eyebrow">Tab 1</div><h4>Issues</h4><p>Every problem in the month, one line each, most serious first. This is where you fix things.</p></div>
         <div class="tab"><div class="eyebrow">Tab 2</div><h4>Coverage</h4><p>A chart per shift showing people on it each day, plus the shift count for every person. This is where you see the shape of the month.</p></div>
@@ -314,6 +315,31 @@
       <div class="callout"><p>In your September roster the spread is 22: four engineers worked 22 night shifts each while six worked none. Running Auto-rotate into October narrows that gap.</p></div>
       <h3>Where the rules come from</h3>
       <p>Every check in Insights depends on numbers you control. The <b>minimum people per day</b> for each shift (Setup › Shift codes) decides what counts as short-staffed. The <b>days in a row</b> limit (Setup › Planner rules) decides when a long run is flagged. Change a number there and every check re-runs instantly. Set a minimum to 0 to switch that check off for that shift.</p>
+    </section>
+
+    <section id="hours">
+      <h2>Hours &amp; overtime</h2>
+      <p class="sub">Worked hours and OT, calculated for every person automatically</p>
+      <p>A standard working day is <b>9 hours</b> (change it in Setup › Planner rules &amp; working hours). Each shift's hours come from its timing, so Morning <em>06:00 – 15:00</em> is 9 hours and Night Late <em>19:00 – 07:00</em> is 12. Overtime is worked out on every edit:</p>
+      <ul>
+        <li><b>Working day:</b> any hours past 9 are OT. A 12-hour shift gives 3 hours OT; a 9-hour shift with 2 extra hours gives 2.</li>
+        <li><b>Extra duty on a rest day:</b> the whole shift is OT. Painting M on someone's rest day adds 9 hours OT.</li>
+        <li><b>Day off or leave:</b> no extra hours can be added and no OT is counted. To call someone in on a day off, give them a shift — that is an extra duty.</li>
+      </ul>
+      <h3>Where to find it</h3>
+      <div class="grid2">
+        <div class="card"><h4>On the grid</h4><p>The two columns pinned to the right of the Planner, <b>Hrs</b> and <b>OT</b>, show each person's month total. A day with overtime has an amber line under the shift; hover any cell to see its hours.</p></div>
+        <div class="card"><h4>In Insights › Hours</h4><p>Month totals, how many people have OT, and a table of days, hours, extra hours and OT per person. Sort by most OT; click a name to jump to their first OT day.</p></div>
+        <div class="card"><h4>In the Excel export</h4><p>Every export carries <b>Hours</b> and <b>OT</b> per person. If you imported your own sheet with an OT column, it is refilled from the roster.</p></div>
+        <div class="card"><h4>In Setup</h4><p>Each shift code shows its hours next to its timing, and the standard day is set under Planner rules &amp; working hours.</p></div>
+      </div>
+      <h3>Entering extra hours</h3>
+      <ol class="steps">
+        <li><div><b>Make sure no brush is selected</b><p>(press <kbd>Esc</kbd>), then click the person's cell for that day.</p></div></li>
+        <li><div><b>Under Extra hours, click +1, +2 or +3,</b><p>or type any amount (half hours allowed) and press <kbd>Enter</kbd>. The cell shows a small amber <b>+2</b>, and the OT column updates at once.</p></div></li>
+        <li><div><b>To remove them,</b><p>open the cell again and click ✕. Extra hours can be undone with <kbd>Ctrl</kbd>+<kbd>Z</kbd> and are kept when the month is regenerated.</p></div></li>
+      </ol>
+      <p>To give someone an <b>extra duty shift</b>, just paint a shift onto their rest day. The OT is counted for you.</p>
     </section>
 
     <section id="checks">

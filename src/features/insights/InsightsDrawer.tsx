@@ -3,14 +3,15 @@ import { useMemo, useState } from 'react';
 
 import { useStore } from '@/app/store';
 import { useViewport } from '@/app/useViewport';
-import { toneVars } from '@/app/tones';
+import { codeVars } from '@/app/tones';
 import { Button, Segmented, cx } from '@/components/ui';
+import { formatHours } from '@/domain/hours';
 import { monthTotals } from '@/domain/summary';
 import { OFF, type Issue } from '@/domain/types';
 import { suggestCover } from '@/domain/validate';
 
 
-type Tab = 'issues' | 'coverage' | 'fairness';
+type Tab = 'issues' | 'coverage' | 'hours' | 'fairness';
 
 export function InsightsDrawer({
   open,
@@ -44,7 +45,7 @@ export function InsightsDrawer({
                     </span>
                   )}
                 </div>
-                <span className="text-[10px] text-ink-3">Staffing checks, coverage & fairness overview</span>
+                <span className="text-[10px] text-ink-3">Staffing checks, coverage, hours & overtime</span>
               </div>
               <Button size="sm" onClick={onClose} className="ml-auto px-2">✕</Button>
             </header>
@@ -56,6 +57,7 @@ export function InsightsDrawer({
                 options={[
                   { value: 'issues', label: 'Issues' },
                   { value: 'coverage', label: 'Coverage' },
+                  { value: 'hours', label: 'Hours' },
                   { value: 'fairness', label: 'Fairness' },
                 ]}
               />
@@ -64,6 +66,7 @@ export function InsightsDrawer({
             <div className="flex-1 overflow-y-auto">
               {tab === 'issues' && <IssuesTab onJump={onJump} />}
               {tab === 'coverage' && <CoverageTab onJump={onJump} />}
+              {tab === 'hours' && <HoursTab onJump={onJump} />}
               {tab === 'fairness' && <FairnessTab />}
             </div>
     </div>
@@ -306,7 +309,7 @@ function CoverageTab({ onJump }: { onJump?: (e: string | undefined, d: number | 
       </div>
 
       {worked.map((code) => {
-        const tone = toneVars(code.tone);
+        const tone = codeVars(code);
         const counts = days.map((d) => d.total[code.id] ?? 0);
         const peak = Math.max(1, ...counts);
         const min = Math.min(...counts);
@@ -416,13 +419,142 @@ function CoverageTab({ onJump }: { onJump?: (e: string | undefined, d: number | 
   );
 }
 
+/* ------------------------------------------------------------------- Hours */
+
+type HoursSort = 'overtime' | 'worked' | 'name';
+
+function HoursTab({ onJump }: { onJump: (e: string | undefined, d: number | undefined) => void }) {
+  const { employees, hours, settings } = useStore();
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<HoursSort>('overtime');
+  const standard = settings.standardHours ?? 9;
+
+  const rows = useMemo(() => {
+    const list = employees
+      .map((employee) => ({ employee, h: hours[employee.id] }))
+      .filter((r): r is { employee: typeof r.employee; h: NonNullable<typeof r.h> } => !!r.h);
+    const q = search.trim().toLowerCase();
+    const filtered = q ? list.filter((r) => r.employee.name.toLowerCase().includes(q)) : list;
+    return filtered.sort((a, b) =>
+      sort === 'name'
+        ? a.employee.name.localeCompare(b.employee.name)
+        : sort === 'worked'
+          ? b.h.worked - a.h.worked
+          : b.h.overtime - a.h.overtime || b.h.worked - a.h.worked,
+    );
+  }, [employees, hours, search, sort]);
+
+  const totals = useMemo(() => {
+    let worked = 0;
+    let overtime = 0;
+    let people = 0;
+    for (const h of Object.values(hours)) {
+      worked += h.worked;
+      overtime += h.overtime;
+      if (h.overtime > 0) people++;
+    }
+    return { worked, overtime, people };
+  }, [hours]);
+
+  /** First day with overtime, so clicking a person lands on it. */
+  const firstOtDay = (days: { overtime: number }[]) => {
+    const i = days.findIndex((d) => d.overtime > 0);
+    return i >= 0 ? i : 0;
+  };
+
+  return (
+    <div className="p-4 flex flex-col gap-3">
+      <p className="text-[11.5px] leading-snug text-ink-3">
+        Standard day is <span className="font-mono text-ink-2">{formatHours(standard)}h</span>. Overtime (OT) is every
+        hour past that on a working day, plus every hour of a shift worked on a rest day. To add extra hours,
+        click a cell on the grid and use <span className="text-ink-2">Extra hours</span>.
+      </p>
+
+      <div className="grid grid-cols-2 gap-2">
+        <MiniStat label="Hours worked" value={formatHours(totals.worked)} />
+        <MiniStat label="Overtime hours" value={formatHours(totals.overtime)} accent={totals.overtime > 0} />
+      </div>
+      <p className="text-[11px] text-ink-3 -mt-1">
+        {totals.people === 0
+          ? 'Nobody has overtime this month.'
+          : `${totals.people} of ${employees.length} people have overtime this month.`}
+      </p>
+
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          placeholder="Filter employee name…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-7 flex-1 min-w-0 px-2.5 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] text-[11.5px] text-ink placeholder:text-ink-3 focus:outline-none focus:border-[var(--accent)]"
+        />
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as HoursSort)}
+          aria-label="Sort by"
+          className="h-7 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] px-1.5 text-[11.5px] text-ink focus:outline-none"
+        >
+          <option value="overtime">Most OT</option>
+          <option value="worked">Most hours</option>
+          <option value="name">Name</option>
+        </select>
+      </div>
+
+      <div className="rounded-lg border border-[var(--line)] overflow-hidden">
+        <div className="grid grid-cols-[1fr_44px_44px_44px_40px] gap-1 bg-[var(--surface-2)] px-2.5 py-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-ink-3">
+          <span>Employee</span>
+          <span className="text-right" title="Days worked">Days</span>
+          <span className="text-right" title="Total hours worked">Hrs</span>
+          <span className="text-right" title="Extra hours entered by hand">Extra</span>
+          <span className="text-right" title="Overtime hours">OT</span>
+        </div>
+        <div className="max-h-[420px] overflow-y-auto divide-y divide-[var(--line)]">
+          {rows.map(({ employee, h }) => (
+            <button
+              key={employee.id}
+              onClick={() => onJump(employee.id, firstOtDay(h.days))}
+              title={
+                h.extraDutyDays
+                  ? `${h.extraDutyDays} shift(s) worked on a rest day — counted fully as OT`
+                  : `Jump to ${employee.name}'s row`
+              }
+              className="grid w-full grid-cols-[1fr_44px_44px_44px_40px] gap-1 items-center px-2.5 py-1.5 text-left font-mono text-[11.5px] hover:bg-[var(--surface-2)] transition-colors"
+            >
+              <span className="truncate font-sans text-[12px] text-ink">
+                {employee.name}
+                {h.extraDutyDays > 0 && (
+                  <span className="ml-1.5 rounded bg-[var(--surface-3)] px-1 font-mono text-[9.5px] text-[var(--warn)]">
+                    +{h.extraDutyDays} duty
+                  </span>
+                )}
+              </span>
+              <span className="text-right text-ink-3">{h.daysWorked}</span>
+              <span className="text-right text-ink-2">{formatHours(h.worked)}</span>
+              <span className="text-right text-ink-3">{h.extra ? formatHours(h.extra) : '–'}</span>
+              <span
+                className="text-right"
+                style={{ color: h.overtime > 0 ? 'var(--warn)' : 'var(--ink-3)', fontWeight: h.overtime > 0 ? 700 : 400 }}
+              >
+                {formatHours(h.overtime)}
+              </span>
+            </button>
+          ))}
+          {rows.length === 0 && (
+            <p className="text-[11.5px] text-ink-3 py-3 text-center">No employee matches "{search}".</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------------- Fairness */
 
 function FairnessTab() {
   const { fairnessRows, codes } = useStore();
   const { rows, spread } = fairnessRows;
   const peak = Math.max(1, ...rows.map((r) => r.nights));
-  const nightTone = toneVars(codes.find((c) => c.tone === 'night')?.tone ?? 'night');
+  const nightTone = codeVars(codes.find((c) => c.tone === 'night') ?? { tone: 'night' });
 
   return (
     <div className="p-4 flex flex-col gap-4">
@@ -472,11 +604,11 @@ function FairnessTab() {
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: number }) {
+function MiniStat({ label, value, accent }: { label: string; value: number | string; accent?: boolean }) {
   return (
     <div className={cx('rounded-lg border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2')}>
       <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-3">{label}</div>
-      <div className="mt-0.5 font-mono text-[17px] leading-none text-ink">{value}</div>
+      <div className="mt-0.5 font-mono text-[17px] leading-none" style={{ color: accent ? 'var(--warn)' : 'var(--ink)' }}>{value}</div>
     </div>
   );
 }

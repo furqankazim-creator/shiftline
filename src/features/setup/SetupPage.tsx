@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react';
 
 import { useStore } from '@/app/store';
-import { TONE_OPTIONS, toneVars } from '@/app/tones';
+import { COLOR_SWATCHES, TONE_OPTIONS, codeVars, isHexColor } from '@/app/tones';
 import { Button, Field, Input, Modal, Select, Switch, cx, useToast } from '@/components/ui';
 import { exportBackup, importBackup, importBackupData, newId, resetToSeed } from '@/data/db';
 import { WEEKDAY_LABELS } from '@/domain/calendar';
+import { formatHours, shiftHours } from '@/domain/hours';
 import type { Line, ShiftCode, Weekday } from '@/domain/types';
 
 export function SetupPage() {
@@ -87,7 +88,7 @@ export function SetupPage() {
         >
           <div className="divide-y divide-[var(--line)]">
             {lineCodes.map((code) => {
-              const tone = toneVars(code.tone);
+              const tone = codeVars(code);
               return (
                 <button
                   key={`${code.scope ?? ""}:${code.id}`}
@@ -106,7 +107,12 @@ export function SetupPage() {
                   <span className="text-[13px]">
                     {code.label}
                   </span>
-                  <span className="hidden md:block font-mono text-[11.5px] text-ink-3">{code.timing}</span>
+                  <span className="hidden md:block font-mono text-[11.5px] text-ink-3">
+                    {code.timing}
+                    {!code.isStatus && (
+                      <span className="ml-1.5 text-ink-2">{formatHours(shiftHours(code, settings.standardHours))}h</span>
+                    )}
+                  </span>
                   <span className="text-[11.5px] text-ink-3">
                     {code.minHeadcount > 0 ? `min ${code.minHeadcount}` : '—'}
                   </span>
@@ -121,7 +127,7 @@ export function SetupPage() {
         </Section>
 
         {/* ------------------------------------------------------- rules */}
-        <Section title="Planner rules" description="What the validator checks on every edit.">
+        <Section title="Planner rules & working hours" description="What the validator checks on every edit, and how hours and overtime are counted.">
           <div className="bg-[var(--surface)] px-4 py-4 flex flex-col gap-4">
             <Field
               label="Warn after this many days worked in a row"
@@ -135,6 +141,27 @@ export function SetupPage() {
                 onChange={(e) => void updateSettings({ maxConsecutive: Number(e.target.value) })}
                 className="w-24"
               />
+            </Field>
+
+            <Field
+              label="Standard working hours per day"
+              hint="Hours past this on a working day are overtime (OT). A shift worked on someone's rest day counts entirely as OT. Extra hours are entered by clicking a cell on the Planner."
+            >
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={1}
+                  max={24}
+                  step={0.5}
+                  value={settings.standardHours}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    if (Number.isFinite(n) && n > 0 && n <= 24) void updateSettings({ standardHours: n });
+                  }}
+                  className="w-24"
+                />
+                <span className="text-[12px] text-ink-3">hours</span>
+              </div>
             </Field>
 
             <Field label="Weekend columns" hint="Tints those columns. It does not decide who is off — rest days do that, per person.">
@@ -438,7 +465,7 @@ function CodeEditor({
   onDelete: () => void;
 }) {
   const [draft, setDraft] = useState<ShiftCode>({ ...code });
-  const tone = toneVars(draft.tone);
+  const tone = codeVars(draft);
 
   return (
     <Modal
@@ -474,10 +501,13 @@ function CodeEditor({
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Timing">
+          <Field
+            label="Timing"
+            hint={draft.isStatus ? undefined : `${formatHours(shiftHours(draft))} hours per shift — used for hours and overtime`}
+          >
             <Input value={draft.timing} onChange={(e) => setDraft({ ...draft, timing: e.target.value })} />
           </Field>
-          <Field label="Colour">
+          <Field label="Shift family" hint="Groups the code with Morning, Night … in headcount totals.">
             <Select
               value={draft.tone}
               onChange={(e) => setDraft({ ...draft, tone: e.target.value as ShiftCode['tone'] })}
@@ -488,6 +518,62 @@ function CodeEditor({
             </Select>
           </Field>
         </div>
+
+        <Field
+          label="Colour"
+          hint={
+            isHexColor(draft.color)
+              ? 'Own colour — shown on the grid, the brush and in Excel.'
+              : "Using the shift family's colour. Pick one to tell this code apart from others in its family."
+          }
+        >
+          <div className="flex flex-wrap items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setDraft({ ...draft, color: undefined })}
+              title="Use the shift family's colour"
+              className={cx(
+                'h-6 rounded-md border px-2 text-[11px] transition-colors',
+                !isHexColor(draft.color)
+                  ? 'border-[var(--accent)] text-ink'
+                  : 'border-[var(--line)] text-ink-3 hover:text-ink-2',
+              )}
+            >
+              Family
+            </button>
+            {COLOR_SWATCHES.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setDraft({ ...draft, color: c })}
+                title={c}
+                aria-label={`Colour ${c}`}
+                className={cx(
+                  'h-6 w-6 rounded-md border-2 transition-transform hover:scale-110',
+                  draft.color?.toLowerCase() === c ? 'border-[var(--ink)]' : 'border-transparent',
+                )}
+                style={{ background: c }}
+              />
+            ))}
+            <label
+              title="Any colour"
+              className="relative grid h-6 w-6 cursor-pointer place-items-center rounded-md border border-dashed border-[var(--line-strong)] text-[13px] text-ink-3 hover:text-ink"
+              style={
+                isHexColor(draft.color) && !COLOR_SWATCHES.includes(draft.color.toLowerCase() as typeof COLOR_SWATCHES[number])
+                  ? { background: draft.color, borderStyle: 'solid', borderColor: 'var(--ink)' }
+                  : undefined
+              }
+            >
+              {!(isHexColor(draft.color) && !COLOR_SWATCHES.includes(draft.color.toLowerCase() as typeof COLOR_SWATCHES[number])) && '+'}
+              <input
+                type="color"
+                value={isHexColor(draft.color) ? draft.color : '#3f7fe0'}
+                onChange={(e) => setDraft({ ...draft, color: e.target.value })}
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              />
+            </label>
+          </div>
+        </Field>
 
         <div className="flex items-center gap-3 rounded-lg border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2.5">
           <span className="text-[11px] text-ink-3">Preview</span>

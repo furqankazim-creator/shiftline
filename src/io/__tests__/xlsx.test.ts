@@ -137,6 +137,22 @@ describe('export', () => {
     expect(String(total?.f)).toMatch(/COUNTIF\(\w+\$4:\w+\$25,"M"\)\+/);
   });
 
+  it("writes each person's Hours and OT after the last day", () => {
+    // 30 days from column C end at AF, so the totals are AG and AH.
+    expect(sheet.AG3.v).toBe('Hours');
+    expect(sheet.AH3.v).toBe('OT');
+    expect(sheet.AG4.v).toBeGreaterThan(0);
+
+    // Two extra hours on a normal working day become two hours of OT.
+    const first = SEED_EMPLOYEES[0];
+    const day = roster.cells[first.id].findIndex((c) => c.source === 'default');
+    const withExtra = buildWorkbook({
+      roster: { ...roster, extraHours: { [first.id]: { [day]: 2 } } },
+      employees: SEED_EMPLOYEES, codes: SEED_CODES, line: SEED_LINES[0],
+    });
+    expect(withExtra.Sheets[withExtra.SheetNames[0]].AH4.v).toBe((sheet.AH4.v as number) + 2);
+  });
+
   it('is far smaller than his original, which carries ~54k conditional formats', () => {
     const out = XLSX.write(wb, { type: 'array', bookType: 'xlsx', cellStyles: true });
     expect(out.byteLength).toBeLessThan(readFileSync(SOURCE).byteLength / 4);
