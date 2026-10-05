@@ -9,20 +9,43 @@ import { PeoplePage } from '@/features/people/PeoplePage';
 import { PlannerPage } from '@/features/planner/PlannerPage';
 import { SetupPage } from '@/features/setup/SetupPage';
 import { AssistantWidget } from '@/features/assistant/AssistantWidget';
+import { LandingPage } from '@/features/landing/LandingPage';
 
 type Page = 'planner' | 'people' | 'setup';
 
+const APP_HASH = '#/app';
+
+/** The planner lives at #/app; anything else shows the landing page. */
+function useInApp(): [boolean, (open: boolean) => void] {
+  const [inApp, setInApp] = useState(() => window.location.hash === APP_HASH);
+
+  useEffect(() => {
+    const onHash = () => setInApp(window.location.hash === APP_HASH);
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  const set = (open: boolean) => {
+    window.location.hash = open ? APP_HASH : '';
+  };
+  return [inApp, set];
+}
+
 export default function App() {
+  const [inApp, setInApp] = useInApp();
+
+  if (!inApp) return <LandingPage onOpen={() => setInApp(true)} />;
+
   return (
     <ToastHost>
       <StoreProvider>
-        <Shell />
+        <Shell onHome={() => setInApp(false)} />
       </StoreProvider>
     </ToastHost>
   );
 }
 
-function Shell() {
+function Shell({ onHome }: { onHome: () => void }) {
   const { ready, settings, setTheme, lines } = useStore();
   const [page, setPage] = useState<Page>('planner');
 
@@ -52,7 +75,13 @@ function Shell() {
         className="no-print flex shrink-0 items-stretch gap-2 sm:gap-4 border-b border-[var(--line-strong)] bg-[var(--surface)] px-3 sm:px-5 h-14"
         style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
       >
-        <div className="flex items-center gap-2.5">
+        <button
+          type="button"
+          onClick={onHome}
+          title="Back to home"
+          aria-label="Back to home page"
+          className="flex items-center gap-2.5 text-left"
+        >
           <Logo size={34} />
           <div className="hidden sm:flex flex-col leading-none">
             <Wordmark className="text-[16px]" />
@@ -60,7 +89,7 @@ function Shell() {
               {line?.name} <span className="text-ink-3">·</span> {monthLabel(settings.activeYear, settings.activeMonth)}
             </span>
           </div>
-        </div>
+        </button>
 
         <span className="hidden sm:block my-3.5 w-px bg-[var(--line-strong)]" aria-hidden />
 
