@@ -11,26 +11,132 @@ import {
   useTransform,
   type Variants,
 } from 'framer-motion';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from 'react';
+
+import { getSettings, patchSettings } from '@/data/db';
 
 /**
  * Landing page shown before the planner.
  *
- * Self-contained: fixed dark palette and its own scroll container (the app
- * root is height-locked), so it looks identical whatever theme the planner
- * was last left in. Motion respects `prefers-reduced-motion`.
+ * Self-contained and theme-aware: every colour is a CSS variable set on the
+ * page root from the palettes below, so one toggle restyles everything. The
+ * chosen theme is shared with the planner (same saved setting). Motion
+ * respects `prefers-reduced-motion`.
  */
+
+/* --------------------------------------------------------------- themes */
+
+type Theme = 'dark' | 'light';
+
+const PALETTES: Record<Theme, Record<string, string>> = {
+  dark: {
+    '--l-bg': '#080b14',
+    '--l-text': '#e8ecf6',
+    '--l-t2': '#9aa4bd',
+    '--l-t3': '#6c7690',
+    '--l-line': 'rgba(255,255,255,0.10)',
+    '--l-line2': 'rgba(255,255,255,0.24)',
+    '--l-card': 'rgba(255,255,255,0.035)',
+    '--l-card-hover': 'rgba(255,255,255,0.07)',
+    '--l-panel': '#0d111d',
+    '--l-panel2': '#0f1320',
+    '--l-inset': 'rgba(0,0,0,0.28)',
+    '--l-chip': '#1a2033',
+    '--l-nav': 'rgba(8,11,20,0.74)',
+    '--l-grid': 'rgba(255,255,255,0.045)',
+    '--l-cta': 'linear-gradient(135deg,#141a30,#0c1020)',
+    '--l-red': '#ff6b7a',
+    '--l-green': '#4ade80',
+    '--l-amber': '#F5B040',
+    '--l-blue': '#8593FF',
+    '--l-cyan': '#34CDD3',
+    '--l-red-bg': '#3a1820',
+    '--l-green-bg': '#10301f',
+    '--l-accent': '#6d8bff',
+    '--l-grad': 'linear-gradient(90deg,#F5B040,#34CDD3 55%,#8593FF)',
+    '--l-btn-ink': '#0b0d12',
+    '--l-glow': 'rgba(52,205,211,0.55)',
+    '--l-orb': '0.25',
+    '--l-shadow': '0 50px 120px -30px #000',
+    '--t-M-bg': '#4a3512', '--t-M-fg': '#F5B040',
+    '--t-E-bg': '#10393b', '--t-E-fg': '#34CDD3',
+    '--t-N-bg': '#232a5c', '--t-N-fg': '#8593FF',
+    '--t-ML-bg': '#3d2c10', '--t-ML-fg': '#e8a23a',
+    '--t-NL-bg': '#1d2350', '--t-NL-fg': '#7080f0',
+    '--t-LV-bg': '#4a1a22', '--t-LV-fg': '#ff6b7a',
+    '--t-off': '#3b4256',
+  },
+  light: {
+    '--l-bg': '#f5f7fc',
+    '--l-text': '#0f172a',
+    '--l-t2': '#475069',
+    '--l-t3': '#6b7490',
+    '--l-line': 'rgba(15,23,42,0.11)',
+    '--l-line2': 'rgba(15,23,42,0.28)',
+    '--l-card': 'rgba(255,255,255,0.78)',
+    '--l-card-hover': '#ffffff',
+    '--l-panel': '#ffffff',
+    '--l-panel2': '#fbfcff',
+    '--l-inset': 'rgba(15,23,42,0.045)',
+    '--l-chip': '#eef1f8',
+    '--l-nav': 'rgba(245,247,252,0.80)',
+    '--l-grid': 'rgba(15,23,42,0.065)',
+    '--l-cta': 'linear-gradient(135deg,#e7eeff,#fff3dd)',
+    '--l-red': '#d1243a',
+    '--l-green': '#15803d',
+    '--l-amber': '#b45309',
+    '--l-blue': '#4658d8',
+    '--l-cyan': '#0e8f96',
+    '--l-red-bg': '#fde4e8',
+    '--l-green-bg': '#dcf5e5',
+    '--l-accent': '#3355e8',
+    '--l-grad': 'linear-gradient(90deg,#d97706,#0e9aa1 55%,#4458e8)',
+    '--l-btn-ink': '#ffffff',
+    '--l-glow': 'rgba(51,85,232,0.35)',
+    '--l-orb': '0.16',
+    '--l-shadow': '0 40px 90px -35px rgba(15,23,42,0.35)',
+    '--t-M-bg': '#fde9c4', '--t-M-fg': '#9a5b00',
+    '--t-E-bg': '#cdf1f2', '--t-E-fg': '#0b7a80',
+    '--t-N-bg': '#dfe3ff', '--t-N-fg': '#3e4fd6',
+    '--t-ML-bg': '#fff1d6', '--t-ML-fg': '#a8680a',
+    '--t-NL-bg': '#e6e9ff', '--t-NL-fg': '#4658d8',
+    '--t-LV-bg': '#fbdadf', '--t-LV-fg': '#c0263a',
+    '--t-off': '#b5bccd',
+  },
+};
+
+const THEME_KEY = 'shiftline-theme';
+
+function readInitialTheme(): Theme {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch {
+    /* storage unavailable */
+  }
+  const fromDoc = document.documentElement.dataset.theme;
+  return fromDoc === 'light' ? 'light' : 'dark';
+}
 
 /* ------------------------------------------------------------------ data */
 
 const TONES: Record<string, { bg: string; fg: string; label: string }> = {
-  M: { bg: '#4a3512', fg: '#F5B040', label: 'Morning' },
-  E: { bg: '#10393b', fg: '#34CDD3', label: 'Evening' },
-  N: { bg: '#232a5c', fg: '#8593FF', label: 'Night' },
-  ML: { bg: '#3d2c10', fg: '#e8a23a', label: 'Morning Late' },
-  NL: { bg: '#1d2350', fg: '#7080f0', label: 'Night Late' },
-  LV: { bg: '#4a1a22', fg: '#ff6b7a', label: 'Leave' },
-  '-': { bg: 'transparent', fg: '#3b4256', label: 'Off' },
+  M: { bg: 'var(--t-M-bg)', fg: 'var(--t-M-fg)', label: 'Morning' },
+  E: { bg: 'var(--t-E-bg)', fg: 'var(--t-E-fg)', label: 'Evening' },
+  N: { bg: 'var(--t-N-bg)', fg: 'var(--t-N-fg)', label: 'Night' },
+  ML: { bg: 'var(--t-ML-bg)', fg: 'var(--t-ML-fg)', label: 'Morning Late' },
+  NL: { bg: 'var(--t-NL-bg)', fg: 'var(--t-NL-fg)', label: 'Night Late' },
+  LV: { bg: 'var(--t-LV-bg)', fg: 'var(--t-LV-fg)', label: 'Leave' },
+  '-': { bg: 'transparent', fg: 'var(--t-off)', label: 'Off' },
 };
 
 const BRUSHES = ['M', 'E', 'N', 'ML', 'NL', 'LV', '-'] as const;
@@ -84,6 +190,8 @@ const FAQ: { q: string; a: string }[] = [
 
 /* --------------------------------------------------------------- helpers */
 
+const GRADIENT = 'var(--l-grad)';
+
 const fadeUp: Variants = {
   hidden: { opacity: 0, y: 32 },
   show: (i: number = 0) => ({
@@ -108,8 +216,6 @@ function Reveal({ children, i = 0, className }: { children: ReactNode; i?: numbe
   );
 }
 
-const GRADIENT = 'linear-gradient(90deg,#F5B040,#34CDD3 55%,#8593FF)';
-
 function GradientText({ children }: { children: ReactNode }) {
   return (
     <span className="bg-clip-text text-transparent" style={{ backgroundImage: GRADIENT }}>
@@ -120,10 +226,137 @@ function GradientText({ children }: { children: ReactNode }) {
 
 function Eyebrow({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-[11.5px] font-semibold uppercase tracking-[0.14em] text-[#b9c2da]">
+    <span
+      className="inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[11.5px] font-semibold uppercase tracking-[0.14em]"
+      style={{ borderColor: 'var(--l-line)', background: 'var(--l-card)', color: 'var(--l-t2)' }}
+    >
       <span className="h-1.5 w-1.5 rounded-full" style={{ background: GRADIENT }} />
       {children}
     </span>
+  );
+}
+
+function ArrowIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M5 12h14M13 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+/* --------------------------------------------------------------- buttons */
+
+type BtnVariant = 'primary' | 'secondary' | 'ghost';
+type BtnSize = 'sm' | 'md' | 'lg';
+
+const BTN_SIZE: Record<BtnSize, string> = {
+  sm: 'h-9 px-4 text-[13px]',
+  md: 'h-11 px-6 text-[14.5px]',
+  lg: 'h-[52px] px-8 text-[15.5px]',
+};
+
+/**
+ * One button for the whole page: consistent height, radius, focus ring,
+ * hover lift and press feedback. `primary` is the gradient call to action.
+ */
+function Btn({
+  variant = 'primary',
+  size = 'md',
+  onClick,
+  children,
+  trailing,
+  className = '',
+  ariaLabel,
+}: {
+  variant?: BtnVariant;
+  size?: BtnSize;
+  onClick: () => void;
+  children: ReactNode;
+  trailing?: ReactNode;
+  className?: string;
+  ariaLabel?: string;
+}) {
+  const reduce = useReducedMotion();
+
+  const style: CSSProperties =
+    variant === 'primary'
+      ? { background: GRADIENT, color: 'var(--l-btn-ink)', boxShadow: '0 12px 36px -12px var(--l-glow), inset 0 1px 0 rgba(255,255,255,0.25)' }
+      : variant === 'secondary'
+        ? { background: 'var(--l-card)', color: 'var(--l-text)', border: '1px solid var(--l-line2)', backdropFilter: 'blur(8px)' }
+        : { background: 'transparent', color: 'var(--l-t2)' };
+
+  return (
+    <motion.button
+      type="button"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      whileHover={reduce ? undefined : { y: -2 }}
+      whileTap={{ scale: 0.97, y: 0 }}
+      transition={{ type: 'spring', stiffness: 420, damping: 24 }}
+      style={style}
+      className={`group relative inline-flex select-none items-center justify-center gap-2 overflow-hidden whitespace-nowrap rounded-xl font-bold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[color:var(--l-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--l-bg)] ${
+        variant === 'ghost' ? 'hover:bg-[var(--l-card-hover)] hover:text-[color:var(--l-text)]' : ''
+      } ${variant === 'secondary' ? 'hover:bg-[var(--l-card-hover)]' : ''} ${BTN_SIZE[size]} ${className}`}
+    >
+      {variant === 'primary' && !reduce && (
+        <motion.span
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 -left-1/2 w-1/3 -skew-x-12 bg-white/35"
+          animate={{ left: ['-40%', '140%'] }}
+          transition={{ duration: 2.4, repeat: Infinity, repeatDelay: 2, ease: 'easeInOut' }}
+        />
+      )}
+      <span className="relative inline-flex items-center gap-2">
+        {children}
+        {trailing && <span className="transition-transform duration-200 group-hover:translate-x-1">{trailing}</span>}
+      </span>
+    </motion.button>
+  );
+}
+
+function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
+  const dark = theme === 'dark';
+  return (
+    <motion.button
+      type="button"
+      onClick={onToggle}
+      whileHover={{ scale: 1.06 }}
+      whileTap={{ scale: 0.92 }}
+      aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'}
+      title={dark ? 'Switch to light theme' : 'Switch to dark theme'}
+      className="grid h-10 w-10 place-items-center overflow-hidden rounded-xl border outline-none transition-colors hover:bg-[var(--l-card-hover)] focus-visible:ring-2 focus-visible:ring-[color:var(--l-accent)]"
+      style={{ borderColor: 'var(--l-line2)', background: 'var(--l-card)', color: 'var(--l-text)' }}
+    >
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.span
+          key={theme}
+          initial={{ rotate: -90, scale: 0.4, opacity: 0 }}
+          animate={{ rotate: 0, scale: 1, opacity: 1 }}
+          exit={{ rotate: 90, scale: 0.4, opacity: 0 }}
+          transition={{ duration: 0.25 }}
+          className="grid place-items-center"
+        >
+          {dark ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
+            </svg>
+          )}
+        </motion.span>
+      </AnimatePresence>
+    </motion.button>
   );
 }
 
@@ -175,7 +408,9 @@ function InteractiveRoster() {
   );
 
   useEffect(() => {
-    const up = () => (painting.current = false);
+    const up = () => {
+      painting.current = false;
+    };
     window.addEventListener('pointerup', up);
     return () => window.removeEventListener('pointerup', up);
   }, []);
@@ -192,46 +427,57 @@ function InteractiveRoster() {
   }, [grid]);
 
   const counts = useMemo(
-    () =>
-      Array.from({ length: DEMO_DAYS }, (_, d) => grid.reduce((n, row) => n + (WORKING.has(row[d]) ? 1 : 0), 0)),
+    () => Array.from({ length: DEMO_DAYS }, (_, d) => grid.reduce((n, row) => n + (WORKING.has(row[d]) ? 1 : 0), 0)),
     [grid],
   );
 
+  const reset = () => setGrid(DEMO_ROWS.map((r) => [...r.codes]));
   const cols = `120px repeat(${DEMO_DAYS}, minmax(0, 1fr))`;
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/10" style={{ background: '#0d111d' }}>
+    <div className="overflow-hidden rounded-2xl border" style={{ background: 'var(--l-panel)', borderColor: 'var(--l-line)', boxShadow: 'var(--l-shadow)' }}>
       {/* brush bar */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-4 py-3">
-        <span className="mr-1 text-[10.5px] font-semibold uppercase tracking-wider text-[#5c6680]">Brush</span>
+      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3" style={{ borderColor: 'var(--l-line)' }}>
+        <span className="mr-1 text-[10.5px] font-semibold uppercase tracking-wider" style={{ color: 'var(--l-t3)' }}>Brush</span>
         {BRUSHES.map((b) => {
           const t = TONES[b];
           const active = brush === b;
+          const fg = b === '-' ? 'var(--l-t2)' : t.fg;
           return (
             <button
               key={b}
+              type="button"
               onClick={() => setBrush(b)}
-              className="rounded-md px-2.5 py-1 text-[11.5px] font-bold transition-all"
-              style={{
-                background: t.bg === 'transparent' ? '#1a2033' : t.bg,
-                color: t.fg === '#3b4256' ? '#8b95ae' : t.fg,
-                boxShadow: active ? `0 0 0 1.5px ${t.fg === '#3b4256' ? '#8b95ae' : t.fg}` : 'none',
-                transform: active ? 'translateY(-1px)' : 'none',
-              }}
+              aria-pressed={active}
               title={t.label}
+              className="rounded-lg px-3 py-1.5 text-[11.5px] font-bold outline-none transition-all hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[color:var(--l-accent)]"
+              style={{
+                background: b === '-' ? 'var(--l-chip)' : t.bg,
+                color: fg,
+                boxShadow: active ? `0 0 0 1.5px ${fg}` : 'none',
+                transform: active ? 'translateY(-1px)' : undefined,
+              }}
             >
               {b === '-' ? 'OFF' : b}
             </button>
           );
         })}
+        <button
+          type="button"
+          onClick={reset}
+          className="ml-1 rounded-lg px-2.5 py-1.5 text-[11.5px] font-semibold outline-none transition-colors hover:bg-[var(--l-card-hover)] focus-visible:ring-2 focus-visible:ring-[color:var(--l-accent)]"
+          style={{ color: 'var(--l-t2)' }}
+        >
+          Reset
+        </button>
         <motion.span
           key={violations.size}
           initial={{ scale: 0.8, opacity: 0.4 }}
           animate={{ scale: 1, opacity: 1 }}
           className="ml-auto rounded-full px-3 py-1 text-[11.5px] font-semibold"
           style={{
-            background: violations.size ? '#3a1820' : '#10301f',
-            color: violations.size ? '#ff6b7a' : '#4ade80',
+            background: violations.size ? 'var(--l-red-bg)' : 'var(--l-green-bg)',
+            color: violations.size ? 'var(--l-red)' : 'var(--l-green)',
           }}
         >
           {violations.size ? `${violations.size} rule issue${violations.size > 1 ? 's' : ''}` : '✓ All rules satisfied'}
@@ -239,18 +485,23 @@ function InteractiveRoster() {
       </div>
 
       <div className="overflow-x-auto p-3">
-        <div className="min-w-[640px] select-none" onPointerLeave={() => (painting.current = false)}>
+        <div
+          className="min-w-[640px] select-none"
+          onPointerLeave={() => {
+            painting.current = false;
+          }}
+        >
           <div className="mb-1 grid items-center gap-1" style={{ gridTemplateColumns: cols }}>
-            <span className="px-2 text-[10px] font-semibold uppercase tracking-wider text-[#5c6680]">People</span>
+            <span className="px-2 text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--l-t3)' }}>People</span>
             {Array.from({ length: DEMO_DAYS }, (_, d) => (
-              <span key={d} className="text-center font-mono text-[10.5px] text-[#5c6680]">{d + 1}</span>
+              <span key={d} className="text-center font-mono text-[10.5px]" style={{ color: 'var(--l-t3)' }}>{d + 1}</span>
             ))}
           </div>
 
           {DEMO_ROWS.map((row, r) => (
             <div key={row.name} className="mb-1 grid items-center gap-1" style={{ gridTemplateColumns: cols }}>
               <span className="truncate px-2 text-[12px] font-semibold">
-                {row.name} <span className="ml-1 text-[10px] font-normal text-[#5c6680]">{row.role}</span>
+                {row.name} <span className="ml-1 text-[10px] font-normal" style={{ color: 'var(--l-t3)' }}>{row.role}</span>
               </span>
               {grid[r].map((code, d) => {
                 const t = TONES[code] ?? TONES['-'];
@@ -264,13 +515,11 @@ function InteractiveRoster() {
                       painting.current = true;
                       paint(r, d);
                     }}
-                    onPointerEnter={() => painting.current && paint(r, d)}
-                    className="grid h-8 cursor-crosshair place-items-center rounded-md text-[11px] font-bold transition-colors"
-                    style={{
-                      background: t.bg,
-                      color: t.fg,
-                      boxShadow: bad ? '0 0 0 1.5px #ff6b7a' : 'none',
+                    onPointerEnter={() => {
+                      if (painting.current) paint(r, d);
                     }}
+                    className="grid h-8 cursor-crosshair place-items-center rounded-md text-[11px] font-bold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[color:var(--l-accent)]"
+                    style={{ background: t.bg, color: t.fg, boxShadow: bad ? '0 0 0 1.5px var(--l-red)' : 'none' }}
                     aria-label={`${row.name} day ${d + 1}: ${t.label}`}
                   >
                     {code === '-' ? '·' : code}
@@ -280,15 +529,15 @@ function InteractiveRoster() {
             </div>
           ))}
 
-          <div className="mt-2 grid items-center gap-1 border-t border-white/10 pt-2" style={{ gridTemplateColumns: cols }}>
-            <span className="px-2 text-[10px] font-semibold uppercase tracking-wider text-[#5c6680]">Working</span>
+          <div className="mt-2 grid items-center gap-1 border-t pt-2" style={{ gridTemplateColumns: cols, borderColor: 'var(--l-line)' }}>
+            <span className="px-2 text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--l-t3)' }}>Working</span>
             {counts.map((c, d) => (
               <motion.span
                 key={`${d}-${c}`}
                 initial={{ y: -4, opacity: 0.4 }}
                 animate={{ y: 0, opacity: 1 }}
                 className="text-center font-mono text-[11px] font-bold"
-                style={{ color: c < 2 ? '#ff6b7a' : '#8b95ae' }}
+                style={{ color: c < 2 ? 'var(--l-red)' : 'var(--l-t2)' }}
               >
                 {c}
               </motion.span>
@@ -296,7 +545,7 @@ function InteractiveRoster() {
           </div>
         </div>
       </div>
-      <div className="border-t border-white/10 px-4 py-2.5 text-[11.5px] text-[#6c7690]">
+      <div className="border-t px-4 py-2.5 text-[11.5px]" style={{ borderColor: 'var(--l-line)', color: 'var(--l-t3)' }}>
         Pick a brush, then click or drag across the grid. Paint a Morning right after a Night to trigger a rule issue.
       </div>
     </div>
@@ -320,7 +569,7 @@ function BentoCard({
 }) {
   const x = useMotionValue(0);
   const y = useMotionValue(0);
-  const glow = useMotionTemplate`radial-gradient(260px circle at ${x}px ${y}px, rgba(133,147,255,0.16), transparent 70%)`;
+  const glow = useMotionTemplate`radial-gradient(260px circle at ${x}px ${y}px, rgba(133,147,255,0.18), transparent 70%)`;
 
   return (
     <Reveal i={i} className={className}>
@@ -330,7 +579,8 @@ function BentoCard({
           x.set(e.clientX - r.left);
           y.set(e.clientY - r.top);
         }}
-        className="group relative h-full overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-6 transition-colors hover:border-white/25"
+        className="group relative h-full overflow-hidden rounded-2xl border p-6 transition-all duration-300 hover:-translate-y-1 hover:border-[color:var(--l-line2)]"
+        style={{ background: 'var(--l-card)', borderColor: 'var(--l-line)' }}
       >
         <motion.div
           aria-hidden
@@ -339,7 +589,7 @@ function BentoCard({
         />
         <div className="relative">
           <h3 className="text-[17px] font-bold tracking-tight">{title}</h3>
-          <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed text-[#8b95ae]">{body}</p>
+          <p className="mt-1.5 max-w-md text-[13.5px] leading-relaxed" style={{ color: 'var(--l-t2)' }}>{body}</p>
           {children && <div className="mt-5">{children}</div>}
         </div>
       </div>
@@ -381,9 +631,9 @@ function RotationViz() {
 
 function RulesViz() {
   const items = [
-    { t: 'Night → Morning turnaround', c: '#ff6b7a' },
-    { t: 'Only 1 on Evening, min is 2', c: '#F5B040' },
-    { t: '7 days in a row', c: '#F5B040' },
+    { t: 'Night → Morning turnaround', c: 'var(--l-red)' },
+    { t: 'Only 1 on Evening, min is 2', c: 'var(--l-amber)' },
+    { t: '7 days in a row', c: 'var(--l-amber)' },
   ];
   return (
     <div className="space-y-2">
@@ -394,7 +644,8 @@ function RulesViz() {
           whileInView={{ opacity: 1, x: 0 }}
           viewport={{ once: true }}
           transition={{ delay: 0.2 + i * 0.15 }}
-          className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[12.5px]"
+          className="flex items-center gap-2.5 rounded-lg border px-3 py-2 text-[12.5px]"
+          style={{ borderColor: 'var(--l-line)', background: 'var(--l-inset)' }}
         >
           <span className="h-2 w-2 rounded-full" style={{ background: it.c, boxShadow: `0 0 10px ${it.c}` }} />
           {it.t}
@@ -406,24 +657,28 @@ function RulesViz() {
 
 function ExcelFlow() {
   const nodes = [
-    { t: 'Your Excel', s: '.xlsx roster', c: '#4ade80' },
-    { t: 'ShiftLine', s: 'plan & check', c: '#8593FF' },
-    { t: 'Excel out', s: 'same layout', c: '#F5B040' },
+    { t: 'Your Excel', s: '.xlsx roster', c: 'var(--l-green)' },
+    { t: 'ShiftLine', s: 'plan & check', c: 'var(--l-blue)' },
+    { t: 'Excel out', s: 'same layout', c: 'var(--l-amber)' },
   ];
   return (
     <div className="relative flex items-center justify-between gap-2">
-      <div className="absolute left-[8%] right-[8%] top-1/2 h-px -translate-y-1/2 border-t border-dashed border-white/20" />
+      <div className="absolute left-[8%] right-[8%] top-1/2 h-px -translate-y-1/2 border-t border-dashed" style={{ borderColor: 'var(--l-line2)' }} />
       <motion.span
         aria-hidden
         className="absolute top-1/2 h-2 w-2 -translate-y-1/2 rounded-full"
-        style={{ background: GRADIENT, boxShadow: '0 0 12px #34CDD3' }}
+        style={{ background: GRADIENT, boxShadow: '0 0 12px var(--l-glow)' }}
         animate={{ left: ['8%', '90%'] }}
         transition={{ duration: 2.6, repeat: Infinity, ease: 'easeInOut' }}
       />
       {nodes.map((n) => (
-        <div key={n.t} className="relative z-10 flex-1 rounded-xl border border-white/10 bg-[#0f1320] px-2 py-3 text-center">
+        <div
+          key={n.t}
+          className="relative z-10 flex-1 rounded-xl border px-2 py-3 text-center"
+          style={{ borderColor: 'var(--l-line)', background: 'var(--l-panel2)' }}
+        >
           <div className="text-[13px] font-bold" style={{ color: n.c }}>{n.t}</div>
-          <div className="text-[10.5px] text-[#6c7690]">{n.s}</div>
+          <div className="text-[10.5px]" style={{ color: 'var(--l-t3)' }}>{n.s}</div>
         </div>
       ))}
     </div>
@@ -432,10 +687,17 @@ function ExcelFlow() {
 
 function FaqItem({ q, a, open, onToggle }: { q: string; a: string; open: boolean; onToggle: () => void }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]">
-      <button onClick={onToggle} className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left" aria-expanded={open}>
+    <div className="overflow-hidden rounded-xl border transition-colors" style={{ borderColor: open ? 'var(--l-line2)' : 'var(--l-line)', background: 'var(--l-card)' }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left outline-none transition-colors hover:bg-[var(--l-card-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--l-accent)]"
+      >
         <span className="text-[14.5px] font-semibold">{q}</span>
-        <motion.span animate={{ rotate: open ? 45 : 0 }} className="text-[20px] leading-none text-[#8b95ae]">+</motion.span>
+        <motion.span animate={{ rotate: open ? 180 : 0 }} className="shrink-0" style={{ color: 'var(--l-t2)' }}>
+          <ChevronDownIcon />
+        </motion.span>
       </button>
       <AnimatePresence initial={false}>
         {open && (
@@ -445,11 +707,24 @@ function FaqItem({ q, a, open, onToggle }: { q: string; a: string; open: boolean
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.3 }}
           >
-            <p className="px-5 pb-4 text-[13.5px] leading-relaxed text-[#8b95ae]">{a}</p>
+            <p className="px-5 pb-4 text-[13.5px] leading-relaxed" style={{ color: 'var(--l-t2)' }}>{a}</p>
           </motion.div>
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+function NavLink({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-lg px-3 py-2 text-[13.5px] font-medium outline-none transition-colors hover:bg-[var(--l-card-hover)] hover:text-[color:var(--l-text)] focus-visible:ring-2 focus-visible:ring-[color:var(--l-accent)]"
+      style={{ color: 'var(--l-t2)' }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -460,6 +735,43 @@ const ROTATING = ['in seconds', 'without the chaos', 'straight from Excel', 'wit
 export function LandingPage({ onOpen }: { onOpen: () => void }) {
   const scroller = useRef<HTMLDivElement>(null);
   const reduce = useReducedMotion();
+
+  const [theme, setTheme] = useState<Theme>(readInitialTheme);
+
+  // Pick up the planner's saved theme if the visitor hasn't chosen one here.
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      if (localStorage.getItem(THEME_KEY)) return;
+    } catch {
+      /* ignore */
+    }
+    getSettings()
+      .then((s) => {
+        if (!cancelled && (s.theme === 'light' || s.theme === 'dark')) setTheme(s.theme);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleTheme = () => {
+    const next: Theme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch {
+      /* ignore */
+    }
+    document.documentElement.dataset.theme = next;
+    // Keep the planner on the same theme.
+    patchSettings({ theme: next }).catch(() => undefined);
+  };
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
 
   const { scrollYProgress, scrollY } = useScroll({ container: scroller });
   const progress = useSpring(scrollYProgress, { stiffness: 120, damping: 24 });
@@ -485,7 +797,7 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
   const tiltX = useSpring(useMotionValue(0), { stiffness: 120, damping: 18 });
   const tiltY = useSpring(useMotionValue(0), { stiffness: 120, damping: 18 });
 
-  const onHeroMove = (e: React.MouseEvent<HTMLElement>) => {
+  const onHeroMove = (e: ReactMouseEvent<HTMLElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const px = (e.clientX - r.left) / r.width - 0.5;
     const py = (e.clientY - r.top) / r.height - 0.5;
@@ -503,12 +815,18 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
 
   const goTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
+  const rootStyle = {
+    ...PALETTES[theme],
+    background: 'var(--l-bg)',
+    color: 'var(--l-text)',
+    fontFamily: 'Inter, system-ui, sans-serif',
+    scrollBehavior: 'smooth',
+    transition: 'background-color 0.35s ease, color 0.35s ease',
+    colorScheme: theme,
+  } as CSSProperties;
+
   return (
-    <div
-      ref={scroller}
-      className="fixed inset-0 overflow-y-auto overflow-x-hidden text-[#e8ecf6]"
-      style={{ background: '#080b14', fontFamily: 'Inter, system-ui, sans-serif', scrollBehavior: 'smooth' }}
-    >
+    <div ref={scroller} className="fixed inset-0 overflow-y-auto overflow-x-hidden" style={rootStyle}>
       <motion.div
         className="fixed left-0 right-0 top-0 z-[60] h-[3px] origin-left"
         style={{ scaleX: progress, background: GRADIENT }}
@@ -518,39 +836,35 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
       <nav
         className="sticky top-0 z-50 transition-all duration-300"
         style={{
-          background: scrolled ? 'rgba(8,11,20,0.72)' : 'transparent',
+          background: scrolled ? 'var(--l-nav)' : 'transparent',
           backdropFilter: scrolled ? 'blur(14px)' : 'none',
-          borderBottom: scrolled ? '1px solid rgba(255,255,255,0.08)' : '1px solid transparent',
+          borderBottom: scrolled ? '1px solid var(--l-line)' : '1px solid transparent',
         }}
       >
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-3.5">
-          <button onClick={() => scroller.current?.scrollTo({ top: 0, behavior: 'smooth' })} className="flex items-center gap-2.5">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-5 py-3">
+          <button
+            type="button"
+            onClick={() => scroller.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+            className="flex items-center gap-2.5 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--l-accent)]"
+            aria-label="ShiftLine, back to top"
+          >
             <Mark size={32} />
             <span className="text-[18px] font-extrabold tracking-tight">
-              Shift<span style={{ color: '#6d8bff' }}>Line</span>
+              Shift<span style={{ color: 'var(--l-accent)' }}>Line</span>
             </span>
           </button>
-          <div className="hidden items-center gap-8 text-[13.5px] text-[#9aa4bd] md:flex">
-            {[
-              ['demo', 'Live demo'],
-              ['features', 'Features'],
-              ['flow', 'Excel workflow'],
-              ['faq', 'FAQ'],
-            ].map(([id, label]) => (
-              <button key={id} onClick={() => goTo(id)} className="transition-colors hover:text-white">
-                {label}
-              </button>
-            ))}
+          <div className="hidden items-center gap-1 md:flex">
+            <NavLink onClick={() => goTo('demo')}>Live demo</NavLink>
+            <NavLink onClick={() => goTo('features')}>Features</NavLink>
+            <NavLink onClick={() => goTo('flow')}>Excel workflow</NavLink>
+            <NavLink onClick={() => goTo('faq')}>FAQ</NavLink>
           </div>
-          <motion.button
-            onClick={onOpen}
-            whileHover={{ scale: 1.04 }}
-            whileTap={{ scale: 0.96 }}
-            className="rounded-lg px-4 py-2 text-[13px] font-bold text-[#0b0d12]"
-            style={{ background: GRADIENT }}
-          >
-            Open Roster
-          </motion.button>
+          <div className="flex items-center gap-2.5">
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
+            <Btn size="sm" onClick={onOpen} trailing={<ArrowIcon />}>
+              Open Roster
+            </Btn>
+          </div>
         </div>
       </nav>
 
@@ -560,13 +874,12 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
         onMouseLeave={onHeroLeave}
         className="relative -mt-[62px] overflow-hidden pb-20 pt-32 sm:pt-40"
       >
-        {/* grid + spotlight + orbs */}
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0"
           style={{
             backgroundImage:
-              'linear-gradient(rgba(255,255,255,0.045) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.045) 1px,transparent 1px)',
+              'linear-gradient(var(--l-grid) 1px,transparent 1px),linear-gradient(90deg,var(--l-grid) 1px,transparent 1px)',
             backgroundSize: '56px 56px',
             maskImage: 'radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 75%)',
             WebkitMaskImage: 'radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 75%)',
@@ -581,14 +894,13 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
           <motion.div
             key={o.c}
             aria-hidden
-            className={`pointer-events-none absolute rounded-full opacity-25 blur-[110px] ${o.cls}`}
-            style={{ background: o.c }}
+            className={`pointer-events-none absolute rounded-full blur-[110px] ${o.cls}`}
+            style={{ background: o.c, opacity: 'var(--l-orb)' as unknown as number }}
             animate={reduce ? undefined : { x: [0, o.dx, 0], y: [0, o.dy, 0] }}
             transition={{ duration: o.d, repeat: Infinity, ease: 'easeInOut' }}
           />
         ))}
 
-        {/* floating shift chips */}
         {!reduce &&
           [
             { c: 'M', cls: 'left-[7%] top-[28%]', d: 5 },
@@ -601,8 +913,13 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
               <motion.span
                 key={f.c}
                 aria-hidden
-                className={`pointer-events-none absolute hidden rounded-lg border border-white/10 px-3 py-1.5 text-[13px] font-bold lg:block ${f.cls}`}
-                style={{ background: t.bg, color: t.fg, boxShadow: `0 12px 40px -10px ${t.fg}66` }}
+                className={`pointer-events-none absolute hidden rounded-lg border px-3 py-1.5 text-[13px] font-bold lg:block ${f.cls}`}
+                style={{
+                  background: t.bg,
+                  color: t.fg,
+                  borderColor: 'var(--l-line)',
+                  boxShadow: `0 12px 40px -10px color-mix(in srgb, ${t.fg} 45%, transparent)`,
+                }}
                 animate={{ y: [0, -16, 0], rotate: [-3, 3, -3] }}
                 transition={{ duration: f.d, repeat: Infinity, ease: 'easeInOut' }}
               >
@@ -644,7 +961,8 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7, delay: 0.3 }}
-            className="mx-auto mt-7 max-w-2xl text-[16px] leading-relaxed text-[#9aa4bd] sm:text-[18px]"
+            className="mx-auto mt-7 max-w-2xl text-[16px] leading-relaxed sm:text-[18px]"
+            style={{ color: 'var(--l-t2)' }}
           >
             ShiftLine imports your Excel roster, rotates Morning, Evening and Night shifts fairly, checks the
             rules as you edit, and exports the exact sheet your managers expect.
@@ -656,42 +974,24 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
             transition={{ duration: 0.7, delay: 0.45 }}
             className="mt-10 flex flex-wrap items-center justify-center gap-3"
           >
-            <motion.button
-              onClick={onOpen}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.97 }}
-              className="group relative overflow-hidden rounded-xl px-8 py-4 text-[15.5px] font-bold text-[#0b0d12]"
-              style={{ background: GRADIENT, boxShadow: '0 14px 50px -12px #34CDD3cc' }}
-            >
-              <motion.span
-                aria-hidden
-                className="absolute inset-y-0 -left-1/2 w-1/3 -skew-x-12 bg-white/40"
-                animate={reduce ? undefined : { left: ['-40%', '140%'] }}
-                transition={{ duration: 2.4, repeat: Infinity, repeatDelay: 1.4, ease: 'easeInOut' }}
-              />
-              <span className="relative flex items-center gap-2">
-                Open Roster
-                <span className="transition-transform group-hover:translate-x-1">→</span>
-              </span>
-            </motion.button>
-            <button
-              onClick={() => goTo('demo')}
-              className="rounded-xl border border-white/15 bg-white/[0.03] px-7 py-4 text-[15.5px] font-semibold text-[#cdd5ea] backdrop-blur transition-colors hover:bg-white/[0.08]"
-            >
-              Try the live demo ↓
-            </button>
+            <Btn size="lg" onClick={onOpen} trailing={<ArrowIcon />}>
+              Open Roster
+            </Btn>
+            <Btn size="lg" variant="secondary" onClick={() => goTo('demo')} trailing={<ChevronDownIcon />}>
+              Try the live demo
+            </Btn>
           </motion.div>
 
           <motion.p
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.8 }}
-            className="mt-5 text-[12.5px] text-[#6c7690]"
+            className="mt-5 text-[12.5px]"
+            style={{ color: 'var(--l-t3)' }}
           >
             No sign-up · Runs in your browser · Your data never leaves your device
           </motion.p>
 
-          {/* tilting preview */}
           <motion.div
             initial={{ opacity: 0, y: 60 }}
             animate={{ opacity: 1, y: 0 }}
@@ -700,17 +1000,17 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
             className="mx-auto mt-16 max-w-4xl"
           >
             <motion.div
-              style={{ rotateX: tiltX, rotateY: tiltY, transformStyle: 'preserve-3d' }}
-              className="overflow-hidden rounded-2xl border border-white/10 text-left"
+              style={{ rotateX: tiltX, rotateY: tiltY, transformStyle: 'preserve-3d', borderColor: 'var(--l-line)' }}
+              className="overflow-hidden rounded-2xl border text-left"
             >
-              <div style={{ background: '#0f1320', boxShadow: '0 50px 120px -30px #000' }}>
-                <div className="flex items-center gap-1.5 border-b border-white/10 px-4 py-2.5">
+              <div style={{ background: 'var(--l-panel2)', boxShadow: 'var(--l-shadow)' }}>
+                <div className="flex items-center gap-1.5 border-b px-4 py-2.5" style={{ borderColor: 'var(--l-line)' }}>
                   <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
                   <span className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" />
                   <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
-                  <span className="ml-3 text-[11.5px] text-[#6c7690]">Line 5 · September 2026</span>
-                  <span className="ml-auto flex items-center gap-1.5 text-[11px] text-[#4ade80]">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#4ade80]" /> Saved
+                  <span className="ml-3 text-[11.5px]" style={{ color: 'var(--l-t3)' }}>Line 5 · September 2026</span>
+                  <span className="ml-auto flex items-center gap-1.5 text-[11px]" style={{ color: 'var(--l-green)' }}>
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: 'var(--l-green)' }} /> Saved
                   </span>
                 </div>
                 <HeroGrid />
@@ -721,15 +1021,21 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
       </header>
 
       {/* ------------------------------------------------------ marquee */}
-      <section className="relative border-y border-white/10 bg-white/[0.02] py-5" aria-label="Capabilities">
-        <div className="overflow-hidden" style={{ maskImage: 'linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)', WebkitMaskImage: 'linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)' }}>
+      <section className="relative border-y py-5" aria-label="Capabilities" style={{ borderColor: 'var(--l-line)', background: 'var(--l-card)' }}>
+        <div
+          className="overflow-hidden"
+          style={{
+            maskImage: 'linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)',
+            WebkitMaskImage: 'linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)',
+          }}
+        >
           <motion.div
             className="flex w-max gap-10 whitespace-nowrap"
             animate={reduce ? undefined : { x: ['0%', '-50%'] }}
             transition={{ duration: 36, repeat: Infinity, ease: 'linear' }}
           >
             {[...MARQUEE, ...MARQUEE].map((m, i) => (
-              <span key={i} className="flex items-center gap-10 text-[14px] font-semibold text-[#7c86a0]">
+              <span key={i} className="flex items-center gap-10 text-[14px] font-semibold" style={{ color: 'var(--l-t3)' }}>
                 {m}
                 <span className="h-1 w-1 rounded-full" style={{ background: GRADIENT }} />
               </span>
@@ -742,13 +1048,15 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
       <section className="mx-auto max-w-5xl px-5 py-20">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           {STATS.map((s, i) => (
-            <Reveal key={s.l} i={i} className="rounded-2xl border border-white/10 bg-white/[0.03] p-5 text-center">
-              <div className="text-[34px] font-extrabold leading-none">
-                <GradientText>
-                  <Counter to={s.to} suffix={s.suffix} />
-                </GradientText>
+            <Reveal key={s.l} i={i} className="h-full">
+              <div className="h-full rounded-2xl border p-5 text-center" style={{ borderColor: 'var(--l-line)', background: 'var(--l-card)' }}>
+                <div className="text-[34px] font-extrabold leading-none">
+                  <GradientText>
+                    <Counter to={s.to} suffix={s.suffix} />
+                  </GradientText>
+                </div>
+                <div className="mt-2 text-[12.5px] leading-snug" style={{ color: 'var(--l-t2)' }}>{s.l}</div>
               </div>
-              <div className="mt-2 text-[12.5px] leading-snug text-[#8b95ae]">{s.l}</div>
             </Reveal>
           ))}
         </div>
@@ -761,7 +1069,7 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
           <h2 className="mt-5 text-[32px] font-extrabold tracking-tight sm:text-[46px]">
             Paint a roster. <GradientText>Feel the rules.</GradientText>
           </h2>
-          <p className="mt-3 text-[15px] text-[#8b95ae]">
+          <p className="mt-3 text-[15px]" style={{ color: 'var(--l-t2)' }}>
             This is the real interaction model: choose a shift code and paint it across the grid. Headcounts and rule
             checks update instantly.
           </p>
@@ -797,42 +1105,12 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
           >
             <RulesViz />
           </BentoCard>
-          <BentoCard
-            i={2}
-            className="md:col-span-2"
-            title="Import any Excel"
-            body="Headers, days, verbose shift text and leave blocks are read automatically. Unknown codes are created for you."
-          />
-          <BentoCard
-            i={3}
-            className="md:col-span-2"
-            title="Export the same layout"
-            body="Operational roster export with PIC/MP sections, date headers, timings, total OT and count rows."
-          />
-          <BentoCard
-            i={4}
-            className="md:col-span-2"
-            title="Headcount rail"
-            body="See who is on each shift every day, with per-person coverage breakdowns in one glance."
-          />
-          <BentoCard
-            i={5}
-            className="md:col-span-2"
-            title="Multi-line teams"
-            body="Each line owns its people and months. Shift codes are shared, so a code added once works everywhere."
-          />
-          <BentoCard
-            i={6}
-            className="md:col-span-2"
-            title="Undo, zoom, fonts"
-            body="Full undo/redo, zoom controls and font options keep large rosters comfortable on any screen."
-          />
-          <BentoCard
-            i={7}
-            className="md:col-span-2"
-            title="Private & offline"
-            body="Data lives in your browser. Save downloads a full Excel backup; restore from JSON or Excel anytime."
-          />
+          <BentoCard i={2} className="md:col-span-2" title="Import any Excel" body="Headers, days, verbose shift text and leave blocks are read automatically. Unknown codes are created for you." />
+          <BentoCard i={3} className="md:col-span-2" title="Export the same layout" body="Operational roster export with PIC/MP sections, date headers, timings, total OT and count rows." />
+          <BentoCard i={4} className="md:col-span-2" title="Headcount rail" body="See who is on each shift every day, with per-person coverage breakdowns in one glance." />
+          <BentoCard i={5} className="md:col-span-2" title="Multi-line teams" body="Each line owns its people and months. Shift codes are shared, so a code added once works everywhere." />
+          <BentoCard i={6} className="md:col-span-2" title="Undo, zoom, fonts" body="Full undo/redo, zoom controls and font options keep large rosters comfortable on any screen." />
+          <BentoCard i={7} className="md:col-span-2" title="Private & offline" body="Data lives in your browser. Save downloads a full Excel backup; restore from JSON or Excel anytime." />
         </div>
       </section>
 
@@ -844,11 +1122,11 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
             <h2 className="mt-5 text-[30px] font-extrabold leading-tight tracking-tight sm:text-[40px]">
               Excel in. <GradientText>Excel out.</GradientText>
             </h2>
-            <p className="mt-4 text-[15px] leading-relaxed text-[#8b95ae]">
+            <p className="mt-4 text-[15px] leading-relaxed" style={{ color: 'var(--l-t2)' }}>
               Keep working the way your department already does. Upload last month's sheet, let ShiftLine read every
               name, day and shift, plan the new month, then download a file laid out exactly like the original.
             </p>
-            <ul className="mt-6 space-y-3 text-[14px] text-[#b9c2da]">
+            <ul className="mt-6 space-y-3 text-[14px]" style={{ color: 'var(--l-t2)' }}>
               {[
                 'Detects name, role and day columns automatically',
                 'Understands "Morning Early | 07:30-18:00 | 11H" style cells',
@@ -856,21 +1134,29 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
                 'Exports sections, date headers and working counts',
               ].map((t) => (
                 <li key={t} className="flex gap-3">
-                  <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-bold text-[#0b0d12]" style={{ background: GRADIENT }}>✓</span>
+                  <span
+                    className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-bold"
+                    style={{ background: GRADIENT, color: 'var(--l-btn-ink)' }}
+                  >
+                    ✓
+                  </span>
                   {t}
                 </li>
               ))}
             </ul>
           </Reveal>
           <Reveal i={2}>
-            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+            <div className="rounded-2xl border p-6" style={{ borderColor: 'var(--l-line)', background: 'var(--l-card)' }}>
               <ExcelFlow />
-              <div className="mt-6 space-y-1.5 rounded-xl border border-white/10 bg-black/25 p-3 font-mono text-[11px] text-[#8b95ae]">
-                <div><span className="text-[#4ade80]">in </span> Morning Early | 07:30-18:00 | 11H</div>
-                <div><span className="text-[#8593FF]">map</span> → <span className="text-[#F5B040]">M</span></div>
-                <div><span className="text-[#4ade80]">in </span> Annual leave</div>
-                <div><span className="text-[#8593FF]">map</span> → <span className="text-[#ff6b7a]">LV</span></div>
-                <div><span className="text-[#F5B040]">out</span> Morning | 06:00-15:00 | 9H</div>
+              <div
+                className="mt-6 space-y-1.5 rounded-xl border p-3 font-mono text-[11px]"
+                style={{ borderColor: 'var(--l-line)', background: 'var(--l-inset)', color: 'var(--l-t2)' }}
+              >
+                <div><span style={{ color: 'var(--l-green)' }}>in </span> Morning Early | 07:30-18:00 | 11H</div>
+                <div><span style={{ color: 'var(--l-blue)' }}>map</span> → <span style={{ color: 'var(--l-amber)' }}>M</span></div>
+                <div><span style={{ color: 'var(--l-green)' }}>in </span> Annual leave</div>
+                <div><span style={{ color: 'var(--l-blue)' }}>map</span> → <span style={{ color: 'var(--l-red)' }}>LV</span></div>
+                <div><span style={{ color: 'var(--l-amber)' }}>out</span> Morning | 06:00-15:00 | 9H</div>
               </div>
             </div>
           </Reveal>
@@ -883,19 +1169,22 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
           <h2 className="text-[30px] font-extrabold tracking-tight sm:text-[42px]">Three steps. That's it.</h2>
         </Reveal>
         <div className="relative grid gap-5 sm:grid-cols-3">
-          <div aria-hidden className="absolute left-[16%] right-[16%] top-9 hidden h-px border-t border-dashed border-white/15 sm:block" />
+          <div aria-hidden className="absolute left-[16%] right-[16%] top-9 hidden h-px border-t border-dashed sm:block" style={{ borderColor: 'var(--l-line2)' }} />
           {[
             ['01', 'Import', 'Upload your existing Excel roster, or start from the demo month.'],
             ['02', 'Plan', 'Generate, rotate and paint shifts. Rule checks guide you as you go.'],
             ['03', 'Export', 'Download the Excel your managers expect, in the layout you imported.'],
           ].map(([n, t, b], i) => (
             <Reveal key={n} i={i}>
-              <div className="relative h-full rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.05] to-transparent p-6 text-center">
-                <span className="relative z-10 mx-auto grid h-[72px] w-[72px] place-items-center rounded-2xl border border-white/10 bg-[#0f1320] text-[26px] font-extrabold">
+              <div className="relative h-full rounded-2xl border p-6 text-center" style={{ borderColor: 'var(--l-line)', background: 'var(--l-card)' }}>
+                <span
+                  className="relative z-10 mx-auto grid h-[72px] w-[72px] place-items-center rounded-2xl border text-[26px] font-extrabold"
+                  style={{ borderColor: 'var(--l-line)', background: 'var(--l-panel2)' }}
+                >
                   <GradientText>{n}</GradientText>
                 </span>
                 <h3 className="mt-4 text-[18px] font-bold">{t}</h3>
-                <p className="mt-1.5 text-[13.5px] leading-relaxed text-[#8b95ae]">{b}</p>
+                <p className="mt-1.5 text-[13.5px] leading-relaxed" style={{ color: 'var(--l-t2)' }}>{b}</p>
               </div>
             </Reveal>
           ))}
@@ -921,58 +1210,54 @@ export function LandingPage({ onOpen }: { onOpen: () => void }) {
       <section className="mx-auto max-w-5xl px-5 pb-24 pt-8">
         <Reveal>
           <div
-            className="relative overflow-hidden rounded-3xl border border-white/10 p-10 text-center sm:p-16"
-            style={{ background: 'linear-gradient(135deg,#141a30,#0c1020)' }}
+            className="relative overflow-hidden rounded-3xl border p-10 text-center sm:p-16"
+            style={{ background: 'var(--l-cta)', borderColor: 'var(--l-line)' }}
           >
             <motion.div
               aria-hidden
-              className="absolute -right-24 -top-24 h-72 w-72 rounded-full opacity-30 blur-[90px]"
-              style={{ background: '#34CDD3' }}
+              className="absolute -right-24 -top-24 h-72 w-72 rounded-full blur-[90px]"
+              style={{ background: '#34CDD3', opacity: 'var(--l-orb)' as unknown as number }}
               animate={reduce ? undefined : { scale: [1, 1.25, 1] }}
               transition={{ duration: 8, repeat: Infinity }}
             />
             <motion.div
               aria-hidden
-              className="absolute -bottom-24 -left-24 h-72 w-72 rounded-full opacity-25 blur-[90px]"
-              style={{ background: '#F5B040' }}
+              className="absolute -bottom-24 -left-24 h-72 w-72 rounded-full blur-[90px]"
+              style={{ background: '#F5B040', opacity: 'var(--l-orb)' as unknown as number }}
               animate={reduce ? undefined : { scale: [1.2, 1, 1.2] }}
               transition={{ duration: 9, repeat: Infinity }}
             />
             <h2 className="relative text-[30px] font-extrabold tracking-tight sm:text-[46px]">
               Ready to plan your <GradientText>next month?</GradientText>
             </h2>
-            <p className="relative mx-auto mt-4 max-w-lg text-[15px] text-[#8b95ae]">
+            <p className="relative mx-auto mt-4 max-w-lg text-[15px]" style={{ color: 'var(--l-t2)' }}>
               Open the roster and start with the demo, or import your own Excel. It takes less than a minute.
             </p>
-            <motion.button
-              onClick={onOpen}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.97 }}
-              className="relative mt-9 rounded-xl px-9 py-4 text-[16px] font-bold text-[#0b0d12]"
-              style={{ background: GRADIENT, boxShadow: '0 14px 50px -12px #34CDD3cc' }}
-            >
-              Open Roster →
-            </motion.button>
+            <div className="relative mt-9 flex justify-center">
+              <Btn size="lg" onClick={onOpen} trailing={<ArrowIcon />}>
+                Open Roster
+              </Btn>
+            </div>
           </div>
         </Reveal>
       </section>
 
       {/* -------------------------------------------------------- footer */}
-      <footer className="border-t border-white/10 px-5 py-10">
+      <footer className="border-t px-5 py-10" style={{ borderColor: 'var(--l-line)' }}>
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-5 sm:flex-row">
           <div className="flex items-center gap-2.5">
             <Mark size={28} />
             <span className="text-[15px] font-extrabold tracking-tight">
-              Shift<span style={{ color: '#6d8bff' }}>Line</span>
+              Shift<span style={{ color: 'var(--l-accent)' }}>Line</span>
             </span>
           </div>
-          <div className="flex gap-6 text-[12.5px] text-[#6c7690]">
-            <button onClick={() => goTo('demo')} className="hover:text-white">Live demo</button>
-            <button onClick={() => goTo('features')} className="hover:text-white">Features</button>
-            <button onClick={() => goTo('faq')} className="hover:text-white">FAQ</button>
-            <button onClick={onOpen} className="hover:text-white">Open Roster</button>
+          <div className="flex flex-wrap justify-center gap-1">
+            <NavLink onClick={() => goTo('demo')}>Live demo</NavLink>
+            <NavLink onClick={() => goTo('features')}>Features</NavLink>
+            <NavLink onClick={() => goTo('faq')}>FAQ</NavLink>
+            <NavLink onClick={onOpen}>Open Roster</NavLink>
           </div>
-          <span className="text-[12px] text-[#4d566c]">Roster planning for operational teams</span>
+          <span className="text-[12px]" style={{ color: 'var(--l-t3)' }}>Roster planning for operational teams</span>
         </div>
       </footer>
     </div>
@@ -995,15 +1280,15 @@ function HeroGrid() {
     <div className="overflow-x-auto p-3">
       <div className="min-w-[620px]">
         <div className="mb-1 grid items-center gap-1" style={{ gridTemplateColumns: cols }}>
-          <span className="px-2 text-[10px] font-semibold uppercase tracking-wider text-[#5c6680]">People</span>
+          <span className="px-2 text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--l-t3)' }}>People</span>
           {Array.from({ length: days }, (_, d) => (
-            <span key={d} className="text-center font-mono text-[10.5px] text-[#5c6680]">{d + 1}</span>
+            <span key={d} className="text-center font-mono text-[10.5px]" style={{ color: 'var(--l-t3)' }}>{d + 1}</span>
           ))}
         </div>
         {DEMO_ROWS.map((row, r) => (
           <div key={row.name} className="mb-1 grid items-center gap-1" style={{ gridTemplateColumns: cols }}>
             <span className="truncate px-2 text-[12px] font-semibold">
-              {row.name} <span className="ml-1 text-[10px] font-normal text-[#5c6680]">{row.role}</span>
+              {row.name} <span className="ml-1 text-[10px] font-normal" style={{ color: 'var(--l-t3)' }}>{row.role}</span>
             </span>
             {row.codes.slice(0, days).map((code, d) => {
               const t = TONES[code] ?? TONES['-'];
