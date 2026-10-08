@@ -802,14 +802,18 @@ Open the link above (your name and password will be pre-filled) to view the sche
   const handleSave = () => {
     const cleanPasscode = sharedPasscode.trim() || 'shiftline2026';
     const cleanAdminPass = adminPassword.trim() || 'supervisor1';
+    const syncedAssigned = assignedList.map((item) =>
+      item.id === 'assign-general' ? { ...item, passcode: cleanPasscode } : item,
+    );
     updateSecuritySettings({
       sharedPasscode: cleanPasscode,
       adminPassword: cleanAdminPass,
-      assignedPasscodes: assignedList,
+      assignedPasscodes: syncedAssigned,
       notifyOnLogin,
       soundAlert,
       requireName,
     });
+    setAssignedList(syncedAssigned);
     toast('Security settings and assigned passcodes saved successfully!', 'ok');
   };
 
@@ -873,7 +877,11 @@ Open the link above (your name and password will be pre-filled) to view the sche
                 onClick={() => {
                   const newCode = `shift-${Math.floor(1000 + Math.random() * 9000)}`;
                   setSharedPasscode(newCode);
-                  updateSecuritySettings({ sharedPasscode: newCode });
+                  const syncedAssigned = assignedList.map((item) =>
+                    item.id === 'assign-general' ? { ...item, passcode: newCode } : item,
+                  );
+                  setAssignedList(syncedAssigned);
+                  updateSecuritySettings({ sharedPasscode: newCode, assignedPasscodes: syncedAssigned });
                   toast(`Generated new default passcode: ${newCode}`, 'ok');
                 }}
                 className="shrink-0 text-xs h-9 px-3 font-semibold"

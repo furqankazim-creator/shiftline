@@ -42,6 +42,17 @@ export interface AssignedPasscode {
   notes?: string;
 }
 
+export function getAssignedUrl(passcode: string, assignedTo?: string): string {
+  const cleanCode = encodeURIComponent((passcode || '').trim());
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173';
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+  const userParam =
+    assignedTo && assignedTo !== 'General Team & Clients'
+      ? `&user=${encodeURIComponent(assignedTo.trim())}`
+      : '';
+  return `${origin}${pathname}?code=${cleanCode}${userParam}#/app`;
+}
+
 export interface SecuritySettings {
   /** The shared link passcode given to team members/clients (default: "shiftline2026") */
   sharedPasscode: string;

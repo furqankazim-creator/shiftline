@@ -44,11 +44,67 @@ export function normalizeWorkType(raw: string | undefined): 'PM' | 'CM' | 'ACS' 
 
 /**
  * Parses an uploaded November Work Orders Excel file (Nov-Workorders.xlsx).
- * Handles flexible header names including the 3 yellow highlighted columns:
- * - Line
- * - Finish Note Later Date / Scheduled Finish
- * - Finish Earlier / Earlier Due Start / Scheduled Start
+ * Handles flexible header names matching the yellow highlighted mandatory columns:
+ * 1. Work Order ID (Col A: 'Work Order')
+ * 2. Scheduled Start Date (Col J: 'Start No Earlier' / Col N: 'Scheduled Start')
+ * 3. Scheduled Finish Date (Col O: 'Finish No Later' / Col Q: 'Scheduled Finish')
+ * 4. Line / Location (Col D: 'Location' / Col W: 'Line')
+ * 5. Resource Required ('Resource Required' / default PM:2, CM:2, ACS:1)
+ *
+ * All other columns (Description, Department, Work Type, Asset, Status) are optional display columns.
  */
+export function parseDateToIso(raw: any, fallbackYear = 2026, fallbackMonth = 11): string {
+  if (!raw) return `${fallbackYear}-${String(fallbackMonth).padStart(2, '0')}-01`;
+
+  if (raw instanceof Date && !isNaN(raw.getTime())) {
+    const y = raw.getFullYear();
+    const m = String(raw.getMonth() + 1).padStart(2, '0');
+    const d = String(raw.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  const str = String(raw).trim();
+  if (!str) return `${fallbackYear}-${String(fallbackMonth).padStart(2, '0')}-01`;
+
+  // ISO: YYYY-MM-DD
+  const isoMatch = str.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (isoMatch) {
+    const y = isoMatch[1];
+    const m = String(parseInt(isoMatch[2], 10)).padStart(2, '0');
+    const d = String(parseInt(isoMatch[3], 10)).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  // US format: M/D/YY or MM/DD/YYYY (or DD/MM/YYYY if day > 12)
+  const usMatch = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (usMatch) {
+    let y = parseInt(usMatch[3], 10);
+    if (y < 100) y += 2000; // 26 -> 2026
+    let partA = parseInt(usMatch[1], 10);
+    let partB = parseInt(usMatch[2], 10);
+    let month = partA;
+    let day = partB;
+    if (partA > 12 && partB <= 12) {
+      day = partA;
+      month = partB;
+    }
+    const m = String(Math.min(12, Math.max(1, month))).padStart(2, '0');
+    const d = String(Math.min(31, Math.max(1, day))).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  // Date parsing fallback
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  return `${fallbackYear}-${String(fallbackMonth).padStart(2, '0')}-01`;
+}
+
 export function parseWorkOrdersWorkbook(buffer: ArrayBuffer): {
   workOrders: WorkOrder[];
   totalRows: number;
@@ -65,7 +121,7 @@ export function parseWorkOrdersWorkbook(buffer: ArrayBuffer): {
   const warnings: string[] = [];
 
   rows.forEach((row, idx) => {
-    // Locate columns with flexible key matching
+    // Locate columns with flexible key matching (prioritizing yellow highlighted columns)
     const findVal = (patterns: string[]): string => {
       for (const [k, v] of Object.entries(row)) {
         const keyClean = k.trim().toLowerCase();
@@ -76,35 +132,57 @@ export function parseWorkOrdersWorkbook(buffer: ArrayBuffer): {
       return '';
     };
 
-    const rawWoId = findVal(['work order', 'wo number', 'order id', 'wo', 'id']) || `WO-${13400000 + idx}`;
-    const rawLine = findVal(['line', 'prod line', 'production line']) || 'L5';
+    // 1. Mandatory Yellow: Work Order ID
+    const rawWoId =
+      findVal(['work order', 'wo number', 'order id', 'wo', 'id']) || `WO-${13400000 + idx}`;
+
+    // 2. Mandatory Yellow: Line / Location
+    const rawLine = findVal(['line', 'location', 'prod line', 'production line', 'asset']) || 'L5';
+
+    // 3. Mandatory Yellow: Scheduled Start Date (Col J: Start No Earlier, Col N: Scheduled Start)
+    const rawStart =
+      findVal([
+        'start no earlier',
+        'scheduled start',
+        'earlier due start',
+        'finish earlier',
+        'sched start',
+        'target start',
+        'start date',
+      ]) || '2026-11-01';
+
+    // 4. Mandatory Yellow: Scheduled Finish Date (Col O: Finish No Later, Col Q: Scheduled Finish)
+    const rawFinish =
+      findVal([
+        'finish no later',
+        'finish note later date',
+        'scheduled finish',
+        'finish later',
+        'sched finish',
+        'target finish',
+        'finish date',
+      ]) || '2026-11-15';
+
+    // 5. Mandatory Yellow / Fallback: Resource Required
+    const rawCrew = findVal(['resource required', 'resource', 'people', 'manpower', 'crew']);
+
+    // Optional Display Columns
     const rawType = findVal(['work type', 'type', 'activity type']) || 'PM';
     const rawDept = findVal(['department', 'dept', 'section']) || 'SLV';
     const rawDesc = findVal(['description', 'task', 'desc', 'activity']) || `Work Order ${rawWoId}`;
-    const rawStart = findVal(['earlier due start', 'finish earlier', 'scheduled start', 'start date', 'early start']) || '2026-11-01';
-    const rawFinish = findVal(['finish note later date', 'finish later', 'scheduled finish', 'finish date', 'target finish']) || '2026-11-15';
     const rawStatus = findVal(['status', 'state']) || 'APPR';
-    const rawCrew = findVal(['resource', 'people', 'manpower', 'crew']);
 
     const line = normalizeLineCode(rawLine);
     const workType = normalizeWorkType(rawType);
 
-    // Default crew size based on work type: PM=2 (or Oct pattern 2-4), CM=2, ACS=1
+    // Default crew size based on work type: PM=2, CM=2, ACS=1 (or parsed crew if specified)
     let resourceRequired = workType === 'PM' ? 2 : workType === 'CM' ? 2 : 1;
     if (rawCrew && !isNaN(parseInt(rawCrew, 10))) {
       resourceRequired = Math.max(1, parseInt(rawCrew, 10));
     }
 
-    // Standardize dates (extract YYYY-MM-DD)
-    const cleanDate = (str: string, fallback: string) => {
-      if (!str) return fallback;
-      const match = str.match(/\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/);
-      if (match) return match[0].replace(/\//g, '-').replace(/\./g, '-');
-      return str.slice(0, 10) || fallback;
-    };
-
-    const scheduledStart = cleanDate(rawStart, '2026-11-01');
-    const scheduledFinish = cleanDate(rawFinish, '2026-11-15');
+    const scheduledStart = parseDateToIso(rawStart, 2026, 11);
+    const scheduledFinish = parseDateToIso(rawFinish, 2026, 11);
 
     workOrders.push({
       id: `wo-${rawWoId.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${idx}`,

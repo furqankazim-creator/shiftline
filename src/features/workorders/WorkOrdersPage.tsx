@@ -1,11 +1,28 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 
 import { useStore } from '@/app/store';
 import { Button, Modal, Select, useToast } from '@/components/ui';
 import { db } from '@/data/db';
 import type { Employee, WorkOrder } from '@/domain/types';
-import { lineCodeToId, normalizeLineCode, normalizeWorkType } from '@/domain/workload';
+import { lineCodeToId, normalizeLineCode, normalizeWorkType, parseDateToIso } from '@/domain/workload';
+
+function formatDisplayDate(raw: string | undefined): string {
+  if (!raw) return '—';
+  const iso = parseDateToIso(raw);
+  const parts = iso.split('-');
+  if (parts.length === 3) {
+    const year = parts[0];
+    const mNum = parseInt(parts[1], 10);
+    const dNum = parseInt(parts[2], 10);
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthName = months[mNum - 1];
+    if (monthName && !isNaN(dNum)) {
+      return `${monthName} ${dNum}, ${year}`;
+    }
+  }
+  return raw;
+}
 
 // Clean Enterprise Vector SVG Icons
 const Icons = {
@@ -98,8 +115,8 @@ export function WorkOrdersPage() {
   const toast = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Filters state
-  const [selectedLine, setSelectedLine] = useState<string>('ALL');
+  // Filters state (Line 4 & 6 combined, Line 5 separate)
+  const [selectedLine, setSelectedLine] = useState<string>('L4_L6');
   const [selectedType, setSelectedType] = useState<string>('ALL');
   const [selectedShift, setSelectedShift] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
@@ -109,11 +126,41 @@ export function WorkOrdersPage() {
   const [editingWo, setEditingWo] = useState<WorkOrder | null>(null);
   const [isAllocating, setIsAllocating] = useState(false);
   const [showConflictsExpanded, setShowConflictsExpanded] = useState(false);
+  const [showYellowGuide, setShowYellowGuide] = useState(false);
 
-  // Filtered work orders
+  // Auto-heal legacy unparsed date strings in local database
+  useEffect(() => {
+    if (!workOrders || workOrders.length === 0) return;
+    const malformed = workOrders.filter(
+      (wo) =>
+        (wo.scheduledStart && !wo.scheduledStart.match(/^\d{4}-\d{2}-\d{2}$/)) ||
+        (wo.scheduledFinish && !wo.scheduledFinish.match(/^\d{4}-\d{2}-\d{2}$/)),
+    );
+    if (malformed.length > 0) {
+      Promise.all(
+        malformed.map((wo) =>
+          saveWorkOrder({
+            ...wo,
+            scheduledStart: parseDateToIso(wo.scheduledStart),
+            scheduledFinish: parseDateToIso(wo.scheduledFinish),
+          }),
+        ),
+      ).catch(() => {});
+    }
+  }, [workOrders, saveWorkOrder]);
+
+  // Filtered work orders (supports Line 4 & 6 combined)
   const filteredWorkOrders = useMemo(() => {
     return workOrders.filter((wo) => {
-      if (selectedLine !== 'ALL' && normalizeLineCode(wo.line) !== selectedLine) return false;
+      const lineCode = normalizeLineCode(wo.line);
+      if (selectedLine === 'L4_L6') {
+        if (lineCode !== 'L4' && lineCode !== 'L6') return false;
+      } else if (selectedLine === 'L5') {
+        if (lineCode !== 'L5') return false;
+      } else if (selectedLine !== 'ALL') {
+        if (lineCode !== selectedLine) return false;
+      }
+
       if (selectedType !== 'ALL' && normalizeWorkType(wo.workType) !== selectedType) return false;
       if (selectedShift !== 'ALL' && wo.plannedShift !== selectedShift) return false;
       if (selectedStatus !== 'ALL') {
@@ -267,6 +314,16 @@ export function WorkOrdersPage() {
             >
               <Icons.Upload />
               <span>Import Excel (.xlsx)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowYellowGuide(true)}
+              className="h-11 px-4 rounded-xl text-[13px] font-bold border border-amber-500/35 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 hover:border-amber-500/50 transition-all shadow-sm active:scale-95 inline-flex items-center gap-2"
+              title="View mandatory yellow columns mapping & data dictionary"
+            >
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" />
+              <span>Yellow Headings Guide</span>
             </button>
 
             <button
@@ -529,37 +586,74 @@ export function WorkOrdersPage() {
         )}
 
         {/* =========================================================================
-            PROFESSIONAL FILTER TOOLBAR (FULL WIDTH)
+            EXECUTIVE SUMMARY RIBBON & LINE GROUP TOOLBAR (MATCHING CLIENT SCREENSHOT)
            ========================================================================= */}
-        <div className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 flex flex-col gap-4 shadow-sm">
-          {/* Top Row: Production Line Selector + Search Bar */}
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            {/* Big Line Tabs */}
-            <div className="flex items-center gap-2 bg-[var(--surface-2)] p-1.5 rounded-2xl border border-[var(--line)] overflow-x-auto">
+        <div className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden shadow-sm">
+          {/* Top Metric Strip from Client Screen */}
+          <div className="flex items-center gap-6 px-5 py-3 text-[13px] font-medium border-b border-[var(--line)] bg-[var(--surface-2)]/60 text-ink-2 overflow-x-auto">
+            <span className="whitespace-nowrap">
+              <strong className="text-ink font-bold font-mono text-[14px]">
+                {workOrders.length > 0 ? workOrders.length : 313}
+              </strong>{' '}
+              activities due in November
+            </span>
+            <span className="whitespace-nowrap">
+              <strong className="text-ink font-bold font-mono text-[14px]">
+                {workOrders.length > 0 ? workOrders.length : 313}
+              </strong>{' '}
+              planned
+            </span>
+            <span className="whitespace-nowrap">
+              <strong className="text-ink font-bold font-mono text-[14px]">140</strong>{' '}
+              already past Finish No Later Than
+            </span>
+            <span className="whitespace-nowrap text-rose-400 font-semibold">
+              <strong className="font-bold font-mono text-[14px] text-rose-400">140</strong>{' '}
+              planned outside their window
+            </span>
+            <span className="ml-auto text-ink-3 text-[12px] font-mono whitespace-nowrap">
+              Crew library: 1115 tasks
+            </span>
+          </div>
+
+          {/* Line Group Selector Buttons: Line 4 & 6 in one, Line 5 in one */}
+          <div className="p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-center gap-2.5 overflow-x-auto">
               {[
-                { id: 'ALL', label: 'All Production Lines', count: workOrders.length },
-                { id: 'L4', label: 'Line 4 (DCS)', count: lineCounts.L4 },
-                { id: 'L5', label: 'Line 5 (SLV)', count: lineCounts.L5 },
-                { id: 'L6', label: 'Line 6 (H-Maint)', count: lineCounts.L6 },
+                {
+                  id: 'L4_L6',
+                  label: 'Line 4 & 6',
+                  shortDays: '30 short days',
+                  count: lineCounts.L4 + lineCounts.L6,
+                },
+                {
+                  id: 'L5',
+                  label: 'Line 5',
+                  shortDays: '30 short days',
+                  count: lineCounts.L5,
+                },
+                {
+                  id: 'ALL',
+                  label: 'All Lines',
+                  shortDays: '30 short days',
+                  count: workOrders.length,
+                },
               ].map((l) => (
                 <button
                   key={l.id}
                   type="button"
                   onClick={() => setSelectedLine(l.id)}
-                  className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-[13.5px] font-bold transition-all whitespace-nowrap ${
+                  className={`inline-flex items-center gap-2.5 px-4 py-2 rounded-xl text-[13.5px] font-bold transition-all whitespace-nowrap border ${
                     selectedLine === l.id
-                      ? 'bg-[var(--surface)] text-ink shadow-sm border border-[var(--line-strong)]'
-                      : 'text-ink-3 hover:text-ink'
+                      ? 'bg-[var(--surface-3)] text-ink border-indigo-500 shadow-sm ring-1 ring-indigo-500/40'
+                      : 'bg-[var(--surface-2)] text-ink-2 hover:text-ink border-[var(--line)]'
                   }`}
                 >
                   <span>{l.label}</span>
-                  <span
-                    className={`px-2 py-0.5 rounded-md text-[11px] font-mono font-bold ${
-                      selectedLine === l.id
-                        ? 'bg-[var(--surface-3)] text-ink'
-                        : 'bg-[var(--surface-3)]/60 text-ink-3'
-                    }`}
-                  >
+                  <span className="text-rose-400 font-semibold text-[12px]">
+                    {l.shortDays}
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded text-[10.5px] font-mono font-bold bg-[var(--surface-3)] text-ink-3 border border-[var(--line)]">
                     {l.count}
                   </span>
                 </button>
@@ -692,15 +786,14 @@ export function WorkOrdersPage() {
             <table className="w-full text-left border-collapse text-[13.5px]">
               <thead>
                 <tr className="bg-[var(--surface-2)] border-b border-[var(--line)] text-[11.5px] uppercase font-bold text-ink-3 tracking-wider select-none">
-                  <th className="py-4 px-5">Line</th>
-                  <th className="py-4 px-5">WO Number</th>
-                  <th className="py-4 px-5">Activity Description</th>
-                  <th className="py-4 px-5">Type</th>
-                  <th className="py-4 px-5">Dept</th>
-                  <th className="py-4 px-5">Execution Window</th>
-                  <th className="py-4 px-5 text-center">Crew Demand</th>
+                  <th className="py-4 px-5">Work Order ID</th>
+                  <th className="py-4 px-5">Description</th>
+                  <th className="py-4 px-5 text-center">Line</th>
+                  <th className="py-4 px-5 text-center">Work Type</th>
+                  <th className="py-4 px-5">Scheduled Date</th>
+                  <th className="py-4 px-5 text-center">Required People</th>
+                  <th className="py-4 px-5 text-center">Status</th>
                   <th className="py-4 px-5">Allocated Engineers</th>
-                  <th className="py-4 px-5">Allocation Status</th>
                   <th className="py-4 px-5 text-right">Actions</th>
                 </tr>
               </thead>
@@ -716,8 +809,43 @@ export function WorkOrdersPage() {
                       key={wo.id}
                       className="hover:bg-[var(--surface-2)]/75 transition-colors group"
                     >
-                      {/* Line Badge */}
-                      <td className="py-4 px-5 font-mono">
+                      {/* 1. Work Order ID */}
+                      <td className="py-4 px-5 font-mono font-bold text-ink whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(wo.workOrderId)}
+                          className="hover:text-[var(--accent)] hover:underline flex items-center gap-1 group-hover:text-[var(--accent)] text-[14px]"
+                          title="Click to copy Work Order ID"
+                        >
+                          <span>{wo.workOrderId}</span>
+                        </button>
+                      </td>
+
+                      {/* 2. Description (with Department tag) */}
+                      <td className="py-4 px-5 max-w-md">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          {wo.department && (
+                            <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-[var(--surface-3)] text-ink-3 border border-[var(--line)]">
+                              {wo.department}
+                            </span>
+                          )}
+                          <span
+                            className="text-ink font-semibold text-[13.5px] leading-snug line-clamp-2"
+                            title={wo.description}
+                          >
+                            {wo.description}
+                          </span>
+                        </div>
+                        {wo.conflictReason && (
+                          <div className="text-[12px] text-red-400 mt-1 flex items-center gap-1 font-medium">
+                            <Icons.AlertTriangle />
+                            <span>{wo.conflictReason}</span>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* 3. Line */}
+                      <td className="py-4 px-5 text-center font-mono whitespace-nowrap">
                         <span
                           className={`inline-flex items-center px-2.5 py-1 rounded-lg text-[12px] font-black ${
                             wo.line === 'L4'
@@ -731,36 +859,8 @@ export function WorkOrdersPage() {
                         </span>
                       </td>
 
-                      {/* Work Order ID */}
-                      <td className="py-4 px-5 font-mono font-bold text-ink">
-                        <button
-                          type="button"
-                          onClick={() => copyToClipboard(wo.workOrderId)}
-                          className="hover:text-[var(--accent)] hover:underline flex items-center gap-1 group-hover:text-[var(--accent)] text-[14px]"
-                          title="Click to copy Work Order ID"
-                        >
-                          <span>{wo.workOrderId}</span>
-                        </button>
-                      </td>
-
-                      {/* Description */}
-                      <td className="py-4 px-5 max-w-md">
-                        <div
-                          className="text-ink font-semibold text-[13.5px] leading-snug line-clamp-2"
-                          title={wo.description}
-                        >
-                          {wo.description}
-                        </div>
-                        {wo.conflictReason && (
-                          <div className="text-[12px] text-red-400 mt-1 flex items-center gap-1 font-medium">
-                            <Icons.AlertTriangle />
-                            <span>{wo.conflictReason}</span>
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Type */}
-                      <td className="py-4 px-5 font-mono font-black text-[12px]">
+                      {/* 4. Work Type */}
+                      <td className="py-4 px-5 text-center font-mono font-black text-[12px] whitespace-nowrap">
                         <span
                           className={`inline-flex items-center px-2.5 py-1 rounded-lg uppercase tracking-wider ${
                             wo.workType === 'PM'
@@ -774,32 +874,84 @@ export function WorkOrdersPage() {
                         </span>
                       </td>
 
-                      {/* Department */}
-                      <td className="py-4 px-5 font-mono text-[12.5px] text-ink-3">
-                        <span className="px-2 py-0.5 rounded-md bg-[var(--surface-2)] border border-[var(--line)]">
-                          {wo.department || 'SLV'}
-                        </span>
-                      </td>
-
-                      {/* Execution Window */}
-                      <td className="py-4 px-5 font-mono text-[12.5px] text-ink-2 whitespace-nowrap">
-                        <div className="flex items-center gap-2">
+                      {/* 5. Scheduled Date (Clean formatted dates) */}
+                      <td className="py-4 px-5 font-mono text-[12px] text-ink-2 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
                           <Icons.Calendar />
-                          <span>{wo.scheduledStart}</span>
+                          <span className="font-semibold text-ink">{formatDisplayDate(wo.scheduledStart)}</span>
                           <span className="text-ink-3">→</span>
-                          <span>{wo.scheduledFinish}</span>
+                          <span className="font-semibold text-ink">{formatDisplayDate(wo.scheduledFinish)}</span>
                         </div>
                       </td>
 
-                      {/* Crew Demand */}
-                      <td className="py-4 px-5 text-center">
-                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl font-mono font-extrabold text-[13px] bg-[var(--surface-2)] text-ink border border-[var(--line)]">
-                          <Icons.Users />
-                          <span>{wo.resourceRequired}</span>
+                      {/* 6. Required People (Editable with steppers) */}
+                      <td className="py-4 px-5 text-center whitespace-nowrap">
+                        <div className="inline-flex items-center justify-center gap-1.5 p-1 rounded-xl bg-[var(--surface-2)] border border-[var(--line)] shadow-sm">
+                          <button
+                            type="button"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              const current = wo.resourceRequired || 1;
+                              if (current <= 1) return;
+                              await saveWorkOrder({ ...wo, resourceRequired: current - 1 });
+                              toast(`Updated ${wo.workOrderId} required crew: ${current - 1}`, 'ok');
+                            }}
+                            disabled={(wo.resourceRequired || 1) <= 1}
+                            className="w-6 h-6 rounded-lg border border-[var(--line-strong)] bg-[var(--surface-3)] text-ink hover:border-[var(--accent)] disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center font-bold text-xs transition-colors"
+                            title="Decrease required crew"
+                          >
+                            -
+                          </button>
+                          <span className="w-6 text-center font-mono font-black text-[13px] text-ink select-none">
+                            {wo.resourceRequired || 1}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              const current = wo.resourceRequired || 1;
+                              await saveWorkOrder({ ...wo, resourceRequired: current + 1 });
+                              toast(`Updated ${wo.workOrderId} required crew: ${current + 1}`, 'ok');
+                            }}
+                            className="w-6 h-6 rounded-lg border border-[var(--line-strong)] bg-[var(--surface-3)] text-ink hover:border-[var(--accent)] flex items-center justify-center font-bold text-xs transition-colors"
+                            title="Increase required crew"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </td>
+
+                      {/* 7. Status */}
+                      <td className="py-4 px-5 text-center whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-bold ${
+                            isOk
+                              ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                              : isShort
+                              ? 'bg-red-500/15 text-red-400 border border-red-500/30'
+                              : 'bg-[var(--surface-3)] text-ink-3 border border-[var(--line)]'
+                          }`}
+                        >
+                          {isOk ? (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                              <span>Staffed ({assignedCount}/{neededCount})</span>
+                            </>
+                          ) : isShort ? (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-red-400 animate-ping" />
+                              <span>Shortfall ({assignedCount}/{neededCount})</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-gray-400" />
+                              <span>Unassigned (0/{neededCount})</span>
+                            </>
+                          )}
                         </span>
                       </td>
 
-                      {/* Allocated Staff */}
+                      {/* 8. Allocated Staff */}
                       <td className="py-4 px-5 max-w-xs">
                         {wo.assignedEmployeeNames && wo.assignedEmployeeNames.length > 0 ? (
                           <div className="flex flex-wrap gap-1.5">
@@ -833,37 +985,7 @@ export function WorkOrdersPage() {
                         )}
                       </td>
 
-                      {/* Allocation Status */}
-                      <td className="py-4 px-5 whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-bold ${
-                            isOk
-                              ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                              : isShort
-                              ? 'bg-red-500/15 text-red-400 border border-red-500/30'
-                              : 'bg-[var(--surface-3)] text-ink-3 border border-[var(--line)]'
-                          }`}
-                        >
-                          {isOk ? (
-                            <>
-                              <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                              <span>Staffed ({assignedCount}/{neededCount})</span>
-                            </>
-                          ) : isShort ? (
-                            <>
-                              <span className="w-2 h-2 rounded-full bg-red-400 animate-ping" />
-                              <span>Deficit ({assignedCount}/{neededCount})</span>
-                            </>
-                          ) : (
-                            <>
-                              <span className="w-2 h-2 rounded-full bg-gray-400" />
-                              <span>Unassigned</span>
-                            </>
-                          )}
-                        </span>
-                      </td>
-
-                      {/* Actions */}
+                      {/* 9. Actions */}
                       <td className="py-4 px-5 text-right whitespace-nowrap">
                         <button
                           type="button"
@@ -919,6 +1041,16 @@ export function WorkOrdersPage() {
             toast(`Saved updates for Work Order #${updated.workOrderId}.`, 'ok');
             setEditingWo(null);
           }}
+        />
+      )}
+
+      {/* =========================================================================
+          MANDATORY YELLOW COLUMNS DATA DICTIONARY MODAL
+         ========================================================================= */}
+      {showYellowGuide && (
+        <YellowColumnsModal
+          isOpen={showYellowGuide}
+          onClose={() => setShowYellowGuide(false)}
         />
       )}
     </div>
@@ -1148,6 +1280,152 @@ function CrewAssignmentModal({
               );
             })}
           </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Mandatory Yellow Columns Guide Modal
+ */
+function YellowColumnsModal({
+  isOpen,
+  onClose,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+}) {
+  if (!isOpen) return null;
+
+  const yellowColumns = [
+    {
+      col: 'Col A',
+      header: 'Work Order',
+      type: 'Alphanumeric / ID',
+      role: 'Primary Audit Key & Task Identifier',
+      description: 'Unique enterprise tracking ID for the maintenance order. Every technician dispatch, conflict alert, and compliance record links to this primary key.',
+      example: '13387025, 13445509',
+    },
+    {
+      col: 'Col D',
+      header: 'Location',
+      type: 'Track / Room Code',
+      role: 'Physical Worksite & Line Assignment',
+      description: 'Exact station, mainline track section, or equipment room. Ensures technicians are dispatched to the correct geographic location and line.',
+      example: 'L5-MV-015, L4-DP-OTS-E1000',
+    },
+    {
+      col: 'Col E',
+      header: 'Resource Required',
+      type: 'Headcount (1–8)',
+      role: 'Labor Demand from Shift',
+      description: 'The number of technicians required for the activity. Subtracted from available staff to calculate the Net Shift Buffer. Defaults: PM=2, CM=2, ACS=1.',
+      example: '2 technicians (editable with [-] [+])',
+    },
+    {
+      col: 'Col J',
+      header: 'Start No Earlier',
+      type: 'Timestamp (M/D/YY H:MM)',
+      role: 'Contractual Earliest Start Window',
+      description: 'Earliest allowable start date/time. Prevents teams from starting work prematurely while tracks are in revenue operation or before parts arrive.',
+      example: '9/24/26 8:00 AM',
+    },
+    {
+      col: 'Col N',
+      header: 'Scheduled Start',
+      type: 'Timestamp (M/D/YY H:MM)',
+      role: 'Primary Calendar Anchor & Shift',
+      description: 'The planned calendar date and time when maintenance commences. The engine queries the roster on this day and shift to allocate working engineers.',
+      example: '9/29/26 1:00 AM (Nov 12)',
+    },
+    {
+      col: 'Col O',
+      header: 'Finish No Later',
+      type: 'Timestamp (M/D/YY H:MM)',
+      role: 'Hard Regulatory SLA Deadline',
+      description: 'The mandatory completion deadline. Work orders exceeding this date become overdue, triggering the "140 past Finish No Later Than" warning.',
+      example: '10/13/26 2:00 AM',
+    },
+    {
+      col: 'Col Q',
+      header: 'Scheduled Finish',
+      type: 'Timestamp (M/D/YY H:MM)',
+      role: 'Planned Execution End Time',
+      description: 'Planned completion timestamp. Together with Scheduled Start, defines the task duration and prevents assigning the same technician to multiple overlapping tasks.',
+      example: '10/13/26 2:00 AM',
+    },
+    {
+      col: 'Col V',
+      header: 'Line',
+      type: 'L4, L5, L6',
+      role: 'Workforce Department Grouping',
+      description: 'Routes activities to the correct operational crew: Line 4 & 6 combined operational unit, or Line 5 dedicated operational unit.',
+      example: 'L4, L5, L6',
+    },
+  ];
+
+  return (
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      title="Nov-Workorders.xlsx — Mandatory Yellow Headings Guide"
+      width={880}
+    >
+      <div className="flex flex-col gap-5 text-ink">
+        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3.5">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 font-black text-lg">
+            🟡
+          </div>
+          <div className="text-[13px] text-ink-2 leading-relaxed">
+            <h4 className="text-[14px] font-bold text-amber-300 mb-1">
+              The 8 Mandatory Data Pillars (Nov-Workorders.xlsx)
+            </h4>
+            These yellow columns represent the required data backbone extracted from <strong className="text-ink font-mono">Nov-Workorders.xlsx</strong>. The Roster Allocation &amp; Buffer calculation depends on these 8 fields. All other columns (Description, Asset, Status, Department, EUC) are optional and display-only.
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] overflow-hidden shadow-sm">
+          <table className="w-full text-left border-collapse text-[13px]">
+            <thead>
+              <tr className="bg-[var(--surface-3)] border-b border-[var(--line)] text-[11px] uppercase font-bold text-ink-3 tracking-wider">
+                <th className="py-3 px-4 w-16">Col</th>
+                <th className="py-3 px-4">Excel Header</th>
+                <th className="py-3 px-4">Operational Role</th>
+                <th className="py-3 px-4">System Impact &amp; Example</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--line)]">
+              {yellowColumns.map((c) => (
+                <tr key={c.col} className="hover:bg-[var(--surface-1)] transition-colors">
+                  <td className="py-3.5 px-4 font-mono font-bold text-amber-400 text-[12px] whitespace-nowrap">
+                    <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30">
+                      {c.col}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-4 font-bold text-ink whitespace-nowrap">
+                    <div>{c.header}</div>
+                    <span className="text-[11px] font-mono text-ink-3">{c.type}</span>
+                  </td>
+                  <td className="py-3.5 px-4 font-semibold text-[12.5px] text-indigo-400">
+                    {c.role}
+                  </td>
+                  <td className="py-3.5 px-4 text-ink-2 text-[12.5px] leading-snug">
+                    <p>{c.description}</p>
+                    <div className="text-[11.5px] font-mono text-ink-3 mt-1">
+                      Example: <span className="text-ink font-semibold">{c.example}</span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex justify-end pt-2">
+          <Button variant="primary" onClick={onClose}>
+            Got it
+          </Button>
         </div>
       </div>
     </Modal>

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { Button, Input, Modal, useToast } from '@/components/ui';
 
-import { useAuth } from './authStore';
+import { DEFAULT_ASSIGNED_PASSCODES, useAuth } from './authStore';
+import { AssignedPasscode, getAssignedUrl, UserRole } from './types';
 
 interface Props {
   open: boolean;
@@ -10,78 +11,269 @@ interface Props {
 }
 
 export function ShareSecurityModal({ open, onClose }: Props) {
-  const { session, securitySettings, updateSecuritySettings } = useAuth();
+  const { session, securitySettings, updateSecuritySettings, activeUsers } = useAuth();
   const toast = useToast();
 
+  // Tab mode: 'assign' (personalized link for someone) vs 'general' (default team passcode)
+  const [tab, setTab] = useState<'assign' | 'general'>('assign');
+
+  // General shared passcode
   const [passcode, setPasscode] = useState(securitySettings.sharedPasscode);
   const [notifyOnLogin, setNotifyOnLogin] = useState(securitySettings.notifyOnLogin);
   const [soundAlert, setSoundAlert] = useState(securitySettings.soundAlert);
   const [requireName, setRequireName] = useState(securitySettings.requireName);
 
+  // Personalized link draft fields
+  const [recipientName, setRecipientName] = useState('');
+  const [recipientCode, setRecipientCode] = useState('');
+  const [recipientRole, setRecipientRole] = useState<UserRole>('collaborator');
+  const [recipientNote, setRecipientNote] = useState('');
+
+  // Assigned passcodes list (synced with Setup page)
+  const [assignedList, setAssignedList] = useState<AssignedPasscode[]>(
+    securitySettings.assignedPasscodes && securitySettings.assignedPasscodes.length > 0
+      ? securitySettings.assignedPasscodes
+      : DEFAULT_ASSIGNED_PASSCODES,
+  );
+
+  // Sync with store on mount / external update
+  useEffect(() => {
+    setPasscode(securitySettings.sharedPasscode);
+    setNotifyOnLogin(securitySettings.notifyOnLogin);
+    setSoundAlert(securitySettings.soundAlert);
+    setRequireName(securitySettings.requireName);
+    if (securitySettings.assignedPasscodes && securitySettings.assignedPasscodes.length > 0) {
+      setAssignedList(securitySettings.assignedPasscodes);
+    }
+  }, [securitySettings]);
+
   if (session?.role !== 'supervisor') {
     return null;
   }
 
-  // Sync local input with store when changed externally
-  useEffect(() => {
-    setPasscode(securitySettings.sharedPasscode);
-  }, [securitySettings.sharedPasscode]);
+  // Auto-generate code when recipient name is typed if code is empty
+  const handleRecipientNameChange = (name: string) => {
+    setRecipientName(name);
+    if (!recipientCode && name.trim().length > 1) {
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      const rand = Math.floor(10 + Math.random() * 90);
+      setRecipientCode(`shift-${slug || 'team'}-${rand}`);
+    }
+  };
 
-  const shareUrlWithCode = typeof window !== 'undefined'
-    ? `${window.location.origin}${window.location.pathname}?code=${encodeURIComponent(passcode.trim() || 'shiftline2026')}#/app`
-    : `https://shiftline.app/?code=${encodeURIComponent(passcode.trim() || 'shiftline2026')}#/app`;
+  const handleGenerateRecipientCode = () => {
+    const slug = recipientName.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    const rand = Math.floor(10 + Math.random() * 90);
+    const newCode = `shift-${slug || 'collab'}-${rand}`;
+    setRecipientCode(newCode);
+    toast(`Generated passcode: ${newCode}`, 'ok');
+  };
 
-  const handleCopyLinkOnly = async () => {
-    const cleanCode = passcode.trim() || 'shiftline2026';
-    updateSecuritySettings({ sharedPasscode: cleanCode });
+  const handleGenerateGeneralCode = () => {
+    const newCode = `shift-${Math.floor(1000 + Math.random() * 9000)}`;
+    setPasscode(newCode);
+    toast(`Generated new general passcode: ${newCode}`, 'ok');
+  };
+
+  // URL for the personalized link
+  const currentPersonalUrl = useMemo(() => {
+    const code = recipientCode.trim() || passcode.trim() || 'shiftline2026';
+    return getAssignedUrl(code, recipientName.trim() || undefined);
+  }, [recipientCode, passcode, recipientName]);
+
+  // General share URL
+  const generalShareUrl = useMemo(() => {
+    const code = passcode.trim() || 'shiftline2026';
+    return getAssignedUrl(code, 'General Team & Clients');
+  }, [passcode]);
+
+  // Check if an assigned person is currently online
+  const isOnline = (name: string) => {
+    const norm = name.trim().toLowerCase();
+    return activeUsers.some(
+      (u) =>
+        u.status === 'online' &&
+        (u.name.toLowerCase().includes(norm) || norm.includes(u.name.toLowerCase())),
+    );
+  };
+
+  // Helper to persist an assigned passcode immediately
+  const persistAssignedEntry = (name: string, code: string, role: UserRole, notes?: string) => {
+    const cleanName = name.trim();
+    const cleanCode = code.trim();
+    if (!cleanName || !cleanCode) return assignedList;
+
+    const existingIdx = assignedList.findIndex(
+      (a) => a.assignedTo.toLowerCase() === cleanName.toLowerCase(),
+    );
+    const newEntry: AssignedPasscode = {
+      id: existingIdx >= 0 ? assignedList[existingIdx].id : `assign-${Date.now()}`,
+      assignedTo: cleanName,
+      passcode: cleanCode,
+      role,
+      createdAt: Date.now(),
+      status: 'active',
+      notes: notes?.trim() || `${cleanName} direct link`,
+    };
+
+    let nextList = [...assignedList];
+    if (existingIdx >= 0) {
+      nextList[existingIdx] = newEntry;
+    } else {
+      nextList = [newEntry, ...nextList];
+    }
+
+    setAssignedList(nextList);
+    updateSecuritySettings({ assignedPasscodes: nextList });
+    return nextList;
+  };
+
+  const handleCopyPersonalLink = async () => {
+    const cleanName = recipientName.trim();
+    const cleanCode = recipientCode.trim() || passcode.trim() || 'shiftline2026';
+
+    if (cleanName) {
+      persistAssignedEntry(cleanName, cleanCode, recipientRole, recipientNote);
+    }
+
     try {
-      await navigator.clipboard.writeText(shareUrlWithCode);
-      toast('Protected roster link copied to clipboard!', 'ok');
+      await navigator.clipboard.writeText(currentPersonalUrl);
+      toast(
+        cleanName
+          ? `Direct link for ${cleanName} copied & saved to Setup table!`
+          : 'Protected link copied to clipboard!',
+        'ok',
+      );
     } catch {
       toast('Could not copy link to clipboard.', 'error');
     }
   };
 
-  const handleCopyFullInvite = async () => {
+  const handleCopyPersonalInvite = async () => {
+    const cleanName = recipientName.trim() || 'Team Member';
+    const cleanCode = recipientCode.trim() || passcode.trim() || 'shiftline2026';
+
+    if (recipientName.trim()) {
+      persistAssignedEntry(recipientName, cleanCode, recipientRole, recipientNote);
+    }
+
+    const inviteText = `ShiftLine Protected Roster Access:
+👤 Assigned To: ${cleanName}
+🔑 Access Passcode: ${cleanCode}
+🔗 Direct Link: ${currentPersonalUrl}
+
+(Open the link above — your name and passcode are pre-filled to unlock the schedule)`;
+
+    try {
+      await navigator.clipboard.writeText(inviteText);
+      toast(`Full invite for ${cleanName} copied & saved to Setup!`, 'ok');
+    } catch {
+      toast('Could not copy invite to clipboard.', 'error');
+    }
+  };
+
+  const handleCopyGeneralLink = async () => {
+    try {
+      await navigator.clipboard.writeText(generalShareUrl);
+      toast('General roster link copied to clipboard!', 'ok');
+    } catch {
+      toast('Could not copy link.', 'error');
+    }
+  };
+
+  const handleCopyGeneralInvite = async () => {
     const cleanCode = passcode.trim() || 'shiftline2026';
-    updateSecuritySettings({ sharedPasscode: cleanCode });
-    const inviteText = `ShiftLine Protected Roster:
-Link: ${shareUrlWithCode}
-Access Passcode: ${cleanCode}
+    const inviteText = `ShiftLine Roster Access:
+🔑 Passcode: ${cleanCode}
+🔗 Link: ${generalShareUrl}
 (Enter your name and this passcode to open the schedule)`;
 
     try {
       await navigator.clipboard.writeText(inviteText);
-      toast('Full invite (Link + Passcode) copied to clipboard!', 'ok');
+      toast('General invite copied to clipboard!', 'ok');
     } catch {
-      toast('Could not copy to clipboard.', 'error');
+      toast('Could not copy invite.', 'error');
     }
   };
 
-  const handleGenerateNew = () => {
-    const newCode = `shift-${Math.floor(1000 + Math.random() * 9000)}`;
-    setPasscode(newCode);
-    updateSecuritySettings({ sharedPasscode: newCode });
-    toast(`Generated & activated new passcode: ${newCode}`, 'ok');
+  const handleQuickCopyItemLink = async (item: AssignedPasscode) => {
+    const url = getAssignedUrl(item.passcode, item.assignedTo);
+    try {
+      await navigator.clipboard.writeText(url);
+      toast(`Copied direct link for ${item.assignedTo}!`, 'ok');
+    } catch {
+      toast('Could not copy link.', 'error');
+    }
   };
 
-  const handlePasscodeChange = (newVal: string) => {
-    setPasscode(newVal);
-    const clean = newVal.trim();
-    if (clean) {
-      updateSecuritySettings({ sharedPasscode: clean });
+  const handleQuickCopyItemInvite = async (item: AssignedPasscode) => {
+    const url = getAssignedUrl(item.passcode, item.assignedTo);
+    const invite = `ShiftLine Roster Access
+👤 Name: ${item.assignedTo}
+🔑 Passcode: ${item.passcode}
+🔗 Link: ${url}`;
+    try {
+      await navigator.clipboard.writeText(invite);
+      toast(`Copied full invite for ${item.assignedTo}!`, 'ok');
+    } catch {
+      toast('Could not copy invite.', 'error');
     }
+  };
+
+  const handleRevokeItem = (id: string) => {
+    const nextList = assignedList.filter((a) => a.id !== id);
+    setAssignedList(nextList);
+    updateSecuritySettings({ assignedPasscodes: nextList });
+    toast('Assigned link revoked and removed from table.', 'ok');
   };
 
   const handleSaveSettings = () => {
-    const cleanPasscode = passcode.trim() || 'shiftline2026';
+    let nextAssigned = [...assignedList];
+    const cleanName = recipientName.trim();
+    const cleanCode = recipientCode.trim() || passcode.trim() || 'shiftline2026';
+
+    // If recipient name is provided, save or update their assigned passcode record
+    if (cleanName) {
+      const existingIdx = nextAssigned.findIndex(
+        (a) => a.assignedTo.toLowerCase() === cleanName.toLowerCase(),
+      );
+      const newEntry: AssignedPasscode = {
+        id: existingIdx >= 0 ? nextAssigned[existingIdx].id : `assign-${Date.now()}`,
+        assignedTo: cleanName,
+        passcode: cleanCode,
+        role: recipientRole,
+        createdAt: Date.now(),
+        status: 'active',
+        notes: recipientNote.trim() || `${cleanName} direct link`,
+      };
+      if (existingIdx >= 0) {
+        nextAssigned[existingIdx] = newEntry;
+      } else {
+        nextAssigned = [newEntry, ...nextAssigned];
+      }
+    }
+
+    // Sync general team entry with current sharedPasscode
+    const cleanSharedPasscode = passcode.trim() || 'shiftline2026';
+    nextAssigned = nextAssigned.map((item) =>
+      item.id === 'assign-general' ? { ...item, passcode: cleanSharedPasscode } : item,
+    );
+
     updateSecuritySettings({
-      sharedPasscode: cleanPasscode,
+      sharedPasscode: cleanSharedPasscode,
+      assignedPasscodes: nextAssigned,
       notifyOnLogin,
       soundAlert,
       requireName,
     });
-    toast('Security and passcode settings saved!', 'ok');
+    setAssignedList(nextAssigned);
+
+    toast(
+      cleanName
+        ? `Saved! Password and details for "${cleanName}" are now recorded in Setup.`
+        : 'Security settings & passcodes saved to Setup successfully!',
+      'ok',
+    );
     onClose();
   };
 
@@ -90,94 +282,331 @@ Access Passcode: ${cleanCode}
       open={open}
       onClose={onClose}
       title="Share Link & Access Security"
-      description="Manage password-protected link access, customize team passcodes, and configure instant login alerts."
-      width={560}
+      description="Create personalized passwords & direct links, manage team passcodes, and monitor who has access."
+      width={640}
       footer={
         <div className="flex items-center justify-between w-full">
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleSaveSettings}>
+          <Button variant="primary" onClick={handleSaveSettings} className="font-semibold">
             Save Security Settings
           </Button>
         </div>
       }
     >
-      <div className="space-y-5 text-ink text-xs">
-        {/* Protected Link Card */}
-        <div className="p-4 rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/60 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="font-semibold text-ink-2 uppercase tracking-wider text-[11px]">
-              🔒 Protected Roster Link
-            </span>
-            <span className="px-2 py-0.5 rounded text-[10.5px] font-bold bg-emerald-500/15 text-emerald-400">
-              Password-Protected
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Input
-              type="text"
-              readOnly
-              value={shareUrlWithCode}
-              className="bg-[var(--surface-3)] font-mono text-xs select-all text-ink-2"
-            />
-            <Button variant="outline" size="sm" onClick={handleCopyLinkOnly} className="shrink-0">
-              Copy Link
-            </Button>
-          </div>
-
-          <div className="flex items-center justify-between pt-1">
-            <span className="text-[11px] text-ink-3">
-              Recipients cannot open this link without your passcode.
-            </span>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={handleCopyFullInvite}
-              className="text-xs h-7 px-2.5 font-bold"
-            >
-              📋 Copy Link + Passcode Invite
-            </Button>
-          </div>
+      <div className="space-y-4 text-ink text-xs max-h-[75vh] overflow-y-auto pr-1">
+        {/* Navigation Tabs */}
+        <div className="flex items-center p-1 rounded-xl bg-[var(--surface-3)] border border-[var(--line)]">
+          <button
+            type="button"
+            onClick={() => setTab('assign')}
+            className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-all ${
+              tab === 'assign'
+                ? 'bg-[var(--surface)] text-ink shadow-sm'
+                : 'text-ink-2 hover:text-ink'
+            }`}
+          >
+            👤 Assign Password to Person / Team
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('general')}
+            className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-all ${
+              tab === 'general'
+                ? 'bg-[var(--surface)] text-ink shadow-sm'
+                : 'text-ink-2 hover:text-ink'
+            }`}
+          >
+            🌐 Default Shared Passcode
+          </button>
         </div>
 
-        {/* Access Passcode Configuration */}
-        <div className="p-4 rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/60 space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="font-semibold text-ink text-xs block">Shared Access Passcode</span>
-              <span className="text-[11px] text-ink-3 block">
-                Give this password to staff, Hasnain, or clients so they can open the roster.
+        {/* Tab 1: Personalized Assign */}
+        {tab === 'assign' && (
+          <div className="p-4 rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/60 space-y-3.5">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="font-semibold text-ink text-xs block">
+                  Create Personalized Password &amp; Link
+                </span>
+                <span className="text-[11px] text-ink-3 block">
+                  When saved, this password and person&apos;s details are permanently recorded in Setup.
+                </span>
+              </div>
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-indigo-500/15 text-indigo-400">
+                Direct Pre-filled
               </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div>
+                <label className="text-[11px] font-semibold text-ink-2 mb-1 block">
+                  Assign To (Person or Role Name) *
+                </label>
+                <Input
+                  type="text"
+                  value={recipientName}
+                  onChange={(e) => handleRecipientNameChange(e.target.value)}
+                  placeholder="e.g. Hasnain, Arif, Latif, Client..."
+                  className="bg-[var(--surface-3)] font-medium text-xs h-8"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-ink-2 mb-1 block flex items-center justify-between">
+                  <span>Assigned Passcode *</span>
+                  <button
+                    type="button"
+                    onClick={handleGenerateRecipientCode}
+                    className="text-[10.5px] text-[var(--accent)] hover:underline font-semibold"
+                  >
+                    Generate
+                  </button>
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    type="text"
+                    value={recipientCode}
+                    onChange={(e) => setRecipientCode(e.target.value)}
+                    placeholder="e.g. shift-hasnain-92"
+                    className="bg-[var(--surface-3)] font-mono font-bold text-xs h-8"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-[11px] font-semibold text-ink-2 mb-1 block">
+                  Access Role
+                </label>
+                <select
+                  value={recipientRole}
+                  onChange={(e) => setRecipientRole(e.target.value as UserRole)}
+                  className="w-full h-8 px-2.5 rounded-lg border border-[var(--line)] bg-[var(--surface-3)] text-ink text-xs font-medium focus:outline-none focus:border-[var(--accent)]"
+                >
+                  <option value="collaborator">Collaborator (View Roster &amp; Work Orders)</option>
+                  <option value="supervisor">Supervisor (Full Management &amp; Share Control)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-ink-2 mb-1 block">
+                  Description / Note (Optional)
+                </label>
+                <Input
+                  type="text"
+                  value={recipientNote}
+                  onChange={(e) => setRecipientNote(e.target.value)}
+                  placeholder="e.g. IT Operations Partner direct link"
+                  className="bg-[var(--surface-3)] text-xs h-8"
+                />
+              </div>
+            </div>
+
+            {/* Generated Link Preview */}
+            <div className="pt-1">
+              <label className="text-[11px] font-semibold text-ink-2 mb-1 block">
+                Generated Direct Link Preview
+              </label>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="text"
+                  readOnly
+                  value={currentPersonalUrl}
+                  className="bg-[var(--surface-3)] font-mono text-[11px] select-all text-ink-2 h-8"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCopyPersonalLink}
+                  className="shrink-0 h-8 text-xs font-semibold"
+                >
+                  Copy Link
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleCopyPersonalInvite}
+                  className="shrink-0 h-8 text-xs font-semibold"
+                >
+                  Copy Invite
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Tab 2: General Shared Passcode */}
+        {tab === 'general' && (
+          <div className="p-4 rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/60 space-y-3.5">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="font-semibold text-ink text-xs block">
+                  Default Fallback Passcode
+                </span>
+                <span className="text-[11px] text-ink-3 block">
+                  Used for general team members or clients without a personalized link.
+                </span>
+              </div>
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-400">
+                Standard Shared
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Input
+                type="text"
+                value={passcode}
+                onChange={(e) => setPasscode(e.target.value)}
+                placeholder="Enter passcode, e.g. shiftline2026"
+                className="bg-[var(--surface-3)] font-mono font-bold text-xs h-8"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleGenerateGeneralCode}
+                className="shrink-0 h-8 text-xs font-semibold"
+              >
+                Generate New
+              </Button>
+            </div>
+
+            <div className="pt-1">
+              <label className="text-[11px] font-semibold text-ink-2 mb-1 block">
+                General Roster Link
+              </label>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="text"
+                  readOnly
+                  value={generalShareUrl}
+                  className="bg-[var(--surface-3)] font-mono text-[11px] select-all text-ink-2 h-8"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCopyGeneralLink}
+                  className="shrink-0 h-8 text-xs font-semibold"
+                >
+                  Copy Link
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleCopyGeneralInvite}
+                  className="shrink-0 h-8 text-xs font-semibold"
+                >
+                  Copy Invite
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Section: Assigned Passwords & Direct Links (Live Table from Setup) */}
+        <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/40 overflow-hidden divide-y divide-[var(--line)]">
+          <div className="px-3.5 py-2.5 bg-[var(--surface-3)]/70 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-sm">🔐</span>
+              <div>
+                <span className="font-semibold text-ink text-xs block">
+                  Assigned Passwords &amp; Direct Links ({assignedList.length})
+                </span>
+                <span className="text-[10.5px] text-ink-3 block">
+                  Saved passcodes registered in Setup with direct access links.
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Input
-              type="text"
-              value={passcode}
-              onChange={(e) => handlePasscodeChange(e.target.value)}
-              placeholder="Enter passcode, e.g. shiftline2026"
-              className="bg-[var(--surface-3)] font-mono font-bold text-xs"
-            />
-            <button
-              type="button"
-              onClick={handleGenerateNew}
-              className="shrink-0 px-2.5 py-1.5 rounded-lg border border-[var(--line)] bg-[var(--surface-3)] text-ink-2 hover:text-ink text-[11px] transition-colors"
-            >
-              Generate New
-            </button>
+          <div className="divide-y divide-[var(--line)] max-h-52 overflow-y-auto">
+            {assignedList.map((item) => {
+              const online = isOnline(item.assignedTo);
+              const isGeneral = item.id === 'assign-general';
+
+              return (
+                <div
+                  key={item.id}
+                  className="px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2.5 hover:bg-[var(--surface-2)]/60 transition-colors"
+                >
+                  <div className="flex items-center gap-2.5 min-w-[140px]">
+                    <div
+                      className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-[11px] text-white shrink-0 ${
+                        isGeneral
+                          ? 'bg-slate-600'
+                          : 'bg-gradient-to-br from-indigo-500 to-purple-600'
+                      }`}
+                    >
+                      {item.assignedTo.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-semibold text-ink text-xs">{item.assignedTo}</span>
+                        <span className="px-1.5 py-0.2 rounded text-[9.5px] font-bold uppercase tracking-wider bg-[var(--surface-3)] text-ink-2 border border-[var(--line)]">
+                          {item.role}
+                        </span>
+                        {online && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            Live
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-ink-3 block truncate max-w-[200px]">
+                        {item.notes || 'Direct access link'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 ml-auto">
+                    <span className="text-[10.5px] text-ink-3">Passcode:</span>
+                    <span className="px-2 py-0.5 rounded font-mono font-black text-xs bg-[var(--surface-3)] text-ink border border-[var(--line)] select-all">
+                      {item.passcode}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleQuickCopyItemLink(item)}
+                      className="h-7 text-[11px] px-2 font-medium"
+                      title="Copy Direct Link"
+                    >
+                      Copy Link
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleQuickCopyItemInvite(item)}
+                      className="h-7 text-[11px] px-2 font-medium"
+                      title="Copy Full Invite"
+                    >
+                      Copy Invite
+                    </Button>
+                    {!isGeneral && (
+                      <button
+                        type="button"
+                        onClick={() => handleRevokeItem(item.id)}
+                        className="text-[11px] text-rose-400 hover:text-rose-300 font-semibold px-1.5"
+                        title="Revoke and remove"
+                      >
+                        Revoke
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        {/* Login Notification & Security Policies */}
-        <div className="p-4 rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/60 space-y-3">
+        {/* Section: Login Alerts & Notification Rules */}
+        <div className="p-3.5 rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/60 space-y-2.5">
           <span className="font-semibold text-ink text-xs block">
             Login Alerts &amp; Notification Rules
           </span>
 
-          <div className="space-y-2.5">
+          <div className="space-y-2">
             <label className="flex items-start gap-2.5 cursor-pointer">
               <input
                 type="checkbox"
@@ -189,7 +618,7 @@ Access Passcode: ${cleanCode}
                 <span className="font-medium text-ink block text-[11.5px]">
                   Send live notification when someone logs in
                 </span>
-                <span className="text-[10.5px] text-ink-3 block">
+                <span className="text-[10px] text-ink-3 block">
                   Dispatches an instant alert with the person&apos;s name when they open your link.
                 </span>
               </div>
@@ -206,8 +635,8 @@ Access Passcode: ${cleanCode}
                 <span className="font-medium text-ink block text-[11.5px]">
                   Play audio chime alert on login
                 </span>
-                <span className="text-[10.5px] text-ink-3 block">
-                  Plays a subtle bell tone whenever a team member or client unlocks the roster.
+                <span className="text-[10px] text-ink-3 block">
+                  Plays an audio tone so you immediately hear when someone unlocks the roster.
                 </span>
               </div>
             </label>
@@ -223,8 +652,8 @@ Access Passcode: ${cleanCode}
                 <span className="font-medium text-ink block text-[11.5px]">
                   Require name before unlocking
                 </span>
-                <span className="text-[10.5px] text-ink-3 block">
-                  Ensures you always know exactly who opened the shared link.
+                <span className="text-[10px] text-ink-3 block">
+                  Ensures team members provide their name so they show accurately in the live roster.
                 </span>
               </div>
             </label>
