@@ -120,6 +120,8 @@ export interface Employee {
   /** Excluded from auto-rotation (fixed GS/project staff). */
   pinned?: boolean;
   active?: boolean;
+  /** Whether this person is a Team Leader (rotates on 2-week cycle while engineers remain steady). */
+  isLeader?: boolean;
 }
 
 /** One resolved grid cell. */
@@ -201,3 +203,63 @@ export interface DaySummary {
   off: number;
   onLeave: number;
 }
+
+/** Work order activity types. */
+export type WorkType = 'PM' | 'CM' | 'ACS' | string;
+
+export interface WorkOrder {
+  id: string;
+  workOrderId: string; // e.g. "13445509"
+  description: string;
+  workType: WorkType; // "PM" | "CM" | "ACS"
+  line: string; // "L4" | "L5" | "L6"
+  department?: string; // "SLV" | "DCS" | "SIG"
+  scheduledStart: string; // ISO date / string
+  scheduledFinish: string; // ISO date / string
+  targetFinish?: string;
+  status: 'APPR' | 'INPRG' | 'COMPLETED' | string;
+  resourceRequired: number; // e.g. 2 for PM, 1 for CM
+
+  // Active assignment state
+  plannedDay?: number; // 1..31
+  plannedShift?: 'M' | 'E' | 'N';
+  assignedEmployeeIds?: string[];
+  assignedEmployeeNames?: string[];
+  allocationStatus?: 'OK' | 'SHORT' | 'CONFLICT' | 'UNASSIGNED';
+  conflictReason?: string;
+}
+
+export interface ResourceRequirement {
+  id: string;
+  line: string; // "L4", "L5", "L6"
+  workType: string; // "PM", "CM", "ACS"
+  shift: 'morning' | 'evening' | 'night' | 'all';
+  defaultPeopleCount: number;
+  department?: string;
+}
+
+export interface AllocationRecord {
+  id: string;
+  workOrderId: string;
+  personId: string;
+  personName: string;
+  allocatedDate: string; // "YYYY-MM-DD"
+  shift: string; // "M" | "E" | "N"
+  allocatedBy?: string;
+  notes?: string;
+  allocationStatus: 'confirmed' | 'tentative' | 'conflict';
+}
+
+export interface ShiftWorkloadBalance {
+  line: string;
+  shift: 'M' | 'E' | 'N';
+  shiftLabel: string;
+  availableStaff: number; // working engineers from roster
+  pmRequired: number;
+  cmReserve: number;
+  acsRequired: number;
+  totalAllocated: number;
+  buffer: number; // availableStaff - totalAllocated
+  status: 'ok' | 'short' | 'tight';
+}
+

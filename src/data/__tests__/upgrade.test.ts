@@ -56,7 +56,7 @@ describe('upgrading a v2 database', () => {
     // The rest of the data is untouched and the old store is gone.
     expect((await db.employees.get('e01'))?.name).toBe('Abdul Saeed');
     expect(db.tables.map((t) => t.name)).not.toContain('codes');
-    expect(db.verno).toBe(6);
+    expect(db.verno).toBe(7);
 
     db.close();
   });

@@ -1,6 +1,22 @@
 import { buildColumns, daysInMonth } from './calendar';
 import { shiftLoad } from './summary';
-import type { Employee, RosterMonth, ShiftCode } from './types';
+import type { Employee, RosterMonth, RotationRule, ShiftCode } from './types';
+
+export const DEFAULT_LEADER_NAMES: string[] = [
+  'Arif Ali khan',
+  'Abdulrahman',
+  'Waqas Tahir',
+  'Abdul Saeed',
+  'Ebora Alexis',
+  'Raneem Almalki',
+];
+
+export function isLeaderEmployee(employee: Employee): boolean {
+  if (employee.isLeader === true) return true;
+  if (employee.isLeader === false) return false;
+  const norm = employee.name.trim().toLowerCase();
+  return DEFAULT_LEADER_NAMES.some((l) => l.toLowerCase() === norm);
+}
 
 export interface RotationHistory {
   /** empId -> shift code -> days worked, accumulated over past months. */
@@ -19,15 +35,35 @@ export interface AutoRotateInput {
    * 1 = rotate everyone every month.
    */
   aggressiveness?: number;
+  /**
+   * 'leaders_only': Only designated team leaders rotate; engineers keep their shift sequence.
+   * 'all': Standard mode where all rotating employees rotate.
+   * Defaults to 'all' for backward compatibility.
+   */
+  targetScope?: 'leaders_only' | 'all';
+  /**
+   * 'two_week_cycle': 2-week Night -> weekend off -> 2-week Evening -> Morning / repeat cycle.
+   * 'monthly': standard monthly shift rotation.
+   * Defaults to 'two_week_cycle'.
+   */
+  patternMode?: 'two_week_cycle' | 'monthly';
+  /** Specific leader employee IDs to rotate (if undefined, all leaders on this line). */
+  selectedLeaderIds?: string[];
 }
 
 export interface AutoRotateResult {
   /** empId -> the shift to use as their default next month. */
   assignments: Record<string, string>;
+  /** empId -> specific mid-month rotation blocks (e.g. 2-week cycle). */
+  rotationRules?: Record<string, RotationRule[]>;
   /** Human-readable account of what moved and why, shown in the modal. */
   notes: string[];
   /** Per-shift, the worst per-day staffing the plan produces. */
   worstCoverage: Record<string, number>;
+  /** IDs of leaders rotated */
+  leadersRotated?: string[];
+  /** IDs of engineers kept fixed */
+  engineersKeptFixed?: string[];
 }
 
 /**
@@ -44,7 +80,119 @@ export interface AutoRotateResult {
  *      move the best-fitting person across from a shift with surplus.
  */
 export function autoRotate(input: AutoRotateInput): AutoRotateResult {
-  const { year, month, employees, codes, history, aggressiveness = 1 } = input;
+  const {
+    year,
+    month,
+    employees,
+    codes,
+    history,
+    aggressiveness = 1,
+    targetScope = 'all',
+    patternMode = 'two_week_cycle',
+    selectedLeaderIds,
+  } = input;
+
+  if (targetScope === 'leaders_only') {
+    const assignments: Record<string, string> = {};
+    const rotationRules: Record<string, RotationRule[]> = {};
+    const notes: string[] = [];
+    const nDays = daysInMonth(year, month);
+    const columns = buildColumns(year, month);
+
+    const leaders = employees.filter((e) => {
+      if (e.active === false) return false;
+      if (selectedLeaderIds && selectedLeaderIds.length > 0) {
+        return selectedLeaderIds.includes(e.id);
+      }
+      return isLeaderEmployee(e);
+    });
+
+    const engineers = employees.filter((e) => !leaders.includes(e) && e.active !== false);
+
+    // Keep engineers on their default shift
+    for (const eng of engineers) {
+      assignments[eng.id] = eng.defaultShift;
+    }
+
+    // Standard rotating shift codes
+    const nightCode = codes.find((c) => c.tone === 'night' && c.rotates && !c.isStatus)?.id ?? 'N';
+    const eveningCode = codes.find((c) => c.tone === 'evening' && c.rotates && !c.isStatus)?.id ?? 'E';
+    const morningCode = codes.find((c) => c.tone === 'morning' && c.rotates && !c.isStatus)?.id ?? 'M';
+
+    // The client's sequence: Night (2w) -> weekend off -> Evening (2w) -> Morning / repeat
+    const phases = [
+      { first: nightCode, second: eveningCode },
+      { first: eveningCode, second: morningCode },
+      { first: morningCode, second: nightCode },
+    ];
+
+    const leadersRotated: string[] = [];
+    leaders.forEach((leader, idx) => {
+      leadersRotated.push(leader.id);
+      if (patternMode === 'monthly') {
+        const cycle = [nightCode, eveningCode, morningCode];
+        const at = cycle.indexOf(leader.defaultShift);
+        const nextCode = at >= 0 ? cycle[(at + 1) % cycle.length] : cycle[idx % cycle.length];
+        assignments[leader.id] = nextCode;
+        rotationRules[leader.id] = [{ fromDay: 1, toDay: nDays, code: nextCode }];
+      } else {
+        // 2-week cycle sequence
+        const phase = phases[idx % phases.length];
+        assignments[leader.id] = phase.first;
+        rotationRules[leader.id] = [
+          { fromDay: 1, toDay: 14, code: phase.first },
+          { fromDay: 15, toDay: nDays, code: phase.second },
+        ];
+      }
+    });
+
+    // Calculate daily worstCoverage
+    const worstCoverage: Record<string, number> = {};
+    const rotatingCodes = codes.filter((c) => c.rotates && !c.isStatus).map((c) => c.id);
+
+    for (const code of rotatingCodes) {
+      let worst = Infinity;
+      for (let d = 0; d < nDays; d++) {
+        const weekday = columns[d].weekday;
+        let count = 0;
+        for (const e of employees) {
+          if (e.active === false) continue;
+          if (e.restDays.includes(weekday)) continue; // Rest day
+
+          let shiftOnDay = assignments[e.id] ?? e.defaultShift;
+          const rules = rotationRules[e.id];
+          if (rules) {
+            const dayNum = d + 1;
+            const r = rules.find((rule) => dayNum >= rule.fromDay && dayNum <= rule.toDay);
+            if (r) shiftOnDay = r.code;
+          }
+          if (shiftOnDay === code) count++;
+        }
+        worst = Math.min(worst, count);
+      }
+      worstCoverage[code] = worst === Infinity ? 0 : worst;
+    }
+
+    if (patternMode === 'two_week_cycle') {
+      notes.push(
+        `Applied 2-week cycle for ${leaders.length} Team Leaders: 2 weeks Night → Weekend off → 2 weeks Evening / Morning.`,
+      );
+    } else {
+      notes.push(`Applied monthly rotation for ${leaders.length} Team Leaders.`);
+    }
+    notes.push(
+      `${engineers.length} Engineers kept on their regular shift sequence throughout the month.`,
+    );
+
+    return {
+      assignments,
+      rotationRules,
+      notes,
+      worstCoverage,
+      leadersRotated,
+      engineersKeptFixed: engineers.map((e) => e.id),
+    };
+  }
 
   const cycle = codes
     .filter((c) => c.rotates && !c.isStatus)

@@ -15,9 +15,20 @@ import { autoRotate, buildHistory, fairness, type AutoRotateResult } from '@/dom
 import { summarise } from '@/domain/summary';
 import { OFF } from '@/domain/types';
 import type {
-  Employee, Issue, LeaveBlock, Line, RosterMonth, ShiftCode,
+  AllocationRecord,
+  Employee,
+  Issue,
+  LeaveBlock,
+  Line,
+  ResourceRequirement,
+  RosterMonth,
+  ShiftCode,
+  ShiftWorkloadBalance,
+  WorkOrder,
 } from '@/domain/types';
 import { validate } from '@/domain/validate';
+import { allocateWorkOrdersToRoster, parseWorkOrdersWorkbook } from '@/domain/workload';
+import { useOptionalAuth } from '@/features/auth/authStore';
 
 interface RosterStore {
   ready: boolean;
@@ -59,7 +70,16 @@ interface RosterStore {
   setExtraHours(employeeId: string, dayIndex: number, hours: number): void;
   regenerate(options?: { respectOverrides?: boolean }): Promise<void>;
   applyRotation(result: AutoRotateResult, targetYear: number, targetMonth: number): Promise<void>;
-  previewRotation(aggressiveness: number): AutoRotateResult;
+  previewRotation(
+    options?:
+      | number
+      | {
+          aggressiveness?: number;
+          targetScope?: 'leaders_only' | 'all';
+          patternMode?: 'two_week_cycle' | 'monthly';
+          selectedLeaderIds?: string[];
+        },
+  ): AutoRotateResult;
   undo(): void;
   redo(): void;
 
@@ -75,6 +95,19 @@ interface RosterStore {
 
   saveLeave(block: LeaveBlock): Promise<void>;
   removeLeave(id: string): Promise<void>;
+
+  // Work Orders & Resource Requirements Integration
+  workOrders: WorkOrder[];
+  resourceRequirements: ResourceRequirement[];
+  allocations: AllocationRecord[];
+  shiftBalances: ShiftWorkloadBalance[];
+  workloadConflicts: any[];
+  uploadWorkOrders(buffer: ArrayBuffer): Promise<{ count: number }>;
+  allocateResources(): Promise<void>;
+  saveWorkOrder(wo: WorkOrder): Promise<void>;
+  saveResourceRequirement(rr: ResourceRequirement): Promise<void>;
+  removeWorkOrder(id: string): Promise<void>;
+  clearWorkOrders(): Promise<void>;
 }
 
 const Ctx = createContext<RosterStore | null>(null);
@@ -342,13 +375,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [activeYear, activeMonth, goToMonth],
   );
 
+  const auth = useOptionalAuth();
+
   const paintCell = useCallback(
     (employeeId: string, dayIndex: number, code: string) => {
       if (!roster) return;
       commit(setCellPure(roster, employeeId, dayIndex, code));
+      auth?.broadcastCellEdit(employeeId, dayIndex, code);
     },
-    [roster, commit],
+    [roster, commit, auth],
   );
+
+  // Real-time live collaboration sync: apply edits received from other windows/users
+  useEffect(() => {
+    if (!auth) return;
+    return auth.subscribeToRemoteCellEdits(({ employeeId, dayIndex, code }) => {
+      if (!roster) return;
+      commit(setCellPure(roster, employeeId, dayIndex, code));
+    });
+  }, [roster, commit, auth]);
 
   const paintRange = useCallback(
     (employeeId: string, from: number, to: number, code: string) => {
@@ -381,11 +426,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   );
 
   const previewRotation = useCallback(
-    (aggressiveness: number) => {
+    (
+      options?:
+        | number
+        | {
+            aggressiveness?: number;
+            targetScope?: 'leaders_only' | 'all';
+            patternMode?: 'two_week_cycle' | 'monthly';
+            selectedLeaderIds?: string[];
+          },
+    ) => {
+      const opts = typeof options === 'number' ? { aggressiveness: options } : options ?? {};
       const target = shiftMonth(activeYear, activeMonth, 1);
       return autoRotate({
-        year: target.year, month: target.month,
-        employees, codes, history, aggressiveness,
+        year: target.year,
+        month: target.month,
+        employees,
+        codes,
+        history,
+        aggressiveness: opts.aggressiveness ?? 1,
+        targetScope: opts.targetScope,
+        patternMode: opts.patternMode,
+        selectedLeaderIds: opts.selectedLeaderIds,
       });
     },
     [activeYear, activeMonth, employees, codes, history],
@@ -405,6 +467,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       await db.transaction('rw', db.employees, db.rosters, async () => {
         for (const employee of employees) {
+          // If result specifies exact mid-month rotation rules (e.g. 2-week cycle):
+          if (result.rotationRules && result.rotationRules[employee.id]) {
+            await db.employees.update(employee.id, {
+              rotations: {
+                ...(employee.rotations ?? {}),
+                [key]: result.rotationRules[employee.id],
+              },
+            });
+            continue;
+          }
+
+          // If this employee was deliberately kept fixed as an engineer, leave their rules intact
+          if (result.engineersKeptFixed?.includes(employee.id)) {
+            continue;
+          }
+
           const code = result.assignments[employee.id];
           if (!code) continue;
           await db.employees.update(employee.id, {
@@ -547,6 +625,71 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await db.leave.delete(leaveId);
   }, []);
 
+  // Work Orders & Workload Integration
+  const workOrders = useLiveQuery(() => db.workOrders.toArray(), [], []) ?? [];
+  const resourceRequirements = useLiveQuery(() => db.resourceRequirements.toArray(), [], []) ?? [];
+  const allocations = useLiveQuery(() => db.allocations.toArray(), [], []) ?? [];
+
+  const { shiftBalances, conflicts: workloadConflicts } = useMemo(() => {
+    return allocateWorkOrdersToRoster({
+      lineId: activeLineId,
+      year: activeYear,
+      month: activeMonth,
+      roster,
+      employees,
+      workOrders,
+      requirements: resourceRequirements,
+    });
+  }, [activeLineId, activeYear, activeMonth, roster, employees, workOrders, resourceRequirements]);
+
+  const uploadWorkOrders = useCallback(async (buffer: ArrayBuffer) => {
+    const { workOrders: parsed } = parseWorkOrdersWorkbook(buffer);
+    await db.transaction('rw', db.workOrders, async () => {
+      await db.workOrders.clear();
+      await db.workOrders.bulkPut(parsed);
+    });
+    return { count: parsed.length };
+  }, []);
+
+  const allocateResources = useCallback(async () => {
+    const outcome = allocateWorkOrdersToRoster({
+      lineId: activeLineId,
+      year: activeYear,
+      month: activeMonth,
+      roster,
+      employees,
+      workOrders,
+      requirements: resourceRequirements,
+    });
+
+    await db.transaction('rw', db.workOrders, db.allocations, async () => {
+      for (const wo of outcome.updatedWorkOrders) {
+        await db.workOrders.put(wo);
+      }
+      await db.allocations.clear();
+      await db.allocations.bulkPut(outcome.allocations);
+    });
+  }, [activeLineId, activeYear, activeMonth, roster, employees, workOrders, resourceRequirements]);
+
+  const saveWorkOrder = useCallback(async (wo: WorkOrder) => {
+    await db.workOrders.put(wo);
+  }, []);
+
+  const saveResourceRequirement = useCallback(async (rr: ResourceRequirement) => {
+    await db.resourceRequirements.put(rr);
+  }, []);
+
+  const removeWorkOrder = useCallback(async (woId: string) => {
+    await db.workOrders.delete(woId);
+  }, []);
+
+  const clearWorkOrders = useCallback(async () => {
+    await db.transaction('rw', db.workOrders, db.allocations, async () => {
+      await db.workOrders.clear();
+      await db.allocations.clear();
+    });
+  }, []);
+
   const value: RosterStore = {
     ready,
     settings,
@@ -594,6 +737,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     removeLine,
     saveLeave,
     removeLeave,
+
+    workOrders,
+    resourceRequirements,
+    allocations,
+    shiftBalances,
+    workloadConflicts,
+    uploadWorkOrders,
+    allocateResources,
+    saveWorkOrder,
+    saveResourceRequirement,
+    removeWorkOrder,
+    clearWorkOrders,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

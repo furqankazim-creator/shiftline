@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
+import { collabServerPlugin } from './src/server/collabPlugin';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), collabServerPlugin()],
   resolve: {
     alias: { '@': path.resolve(import.meta.dirname, './src') },
   },

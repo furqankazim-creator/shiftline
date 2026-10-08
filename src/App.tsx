@@ -3,15 +3,21 @@ import { useEffect, useState } from 'react';
 
 import { StoreProvider, useStore } from '@/app/store';
 import { switchTheme } from '@/app/themeTransition';
-import { ToastHost, cx } from '@/components/ui';
+import { Button, ToastHost, cx } from '@/components/ui';
 import { monthLabel } from '@/domain/calendar';
+import { AuthProvider, useAuth } from '@/features/auth/authStore';
+import { LivePresence } from '@/features/auth/LivePresence';
+import { LoginGate } from '@/features/auth/LoginGate';
+import { NotificationBell } from '@/features/auth/NotificationDrawer';
+import { ShareSecurityModal } from '@/features/auth/ShareSecurityModal';
 import { PeoplePage } from '@/features/people/PeoplePage';
 import { PlannerPage } from '@/features/planner/PlannerPage';
 import { SetupPage } from '@/features/setup/SetupPage';
 import { AssistantWidget } from '@/features/assistant/AssistantWidget';
 import { LandingPage } from '@/features/landing/LandingPage';
+import { WorkOrdersPage } from '@/features/workorders/WorkOrdersPage';
 
-type Page = 'planner' | 'people' | 'setup';
+type Page = 'planner' | 'workorders' | 'people' | 'setup';
 
 const APP_HASH = '#/app';
 
@@ -38,16 +44,32 @@ export default function App() {
 
   return (
     <ToastHost>
-      <StoreProvider>
-        <Shell onHome={() => setInApp(false)} />
-      </StoreProvider>
+      <AuthProvider>
+        <AppContent onHome={() => setInApp(false)} />
+      </AuthProvider>
     </ToastHost>
+  );
+}
+
+function AppContent({ onHome }: { onHome: () => void }) {
+  const { isAuthenticated } = useAuth();
+
+  if (!isAuthenticated) {
+    return <LoginGate onBackToHome={onHome} />;
+  }
+
+  return (
+    <StoreProvider>
+      <Shell onHome={onHome} />
+    </StoreProvider>
   );
 }
 
 function Shell({ onHome }: { onHome: () => void }) {
   const { ready, settings, setTheme, lines } = useStore();
+  const { session, logout } = useAuth();
   const [page, setPage] = useState<Page>('planner');
+  const [shareOpen, setShareOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme;
@@ -72,98 +94,150 @@ function Shell({ onHome }: { onHome: () => void }) {
   return (
     <div className="flex h-full flex-col">
       <header
-        className="no-print flex shrink-0 items-stretch gap-2 sm:gap-4 border-b border-[var(--line-strong)] bg-[var(--surface)] px-3 sm:px-5 h-14"
+        className="no-print relative mx-3 sm:mx-6 my-3 flex shrink-0 items-center justify-between gap-4 rounded-2xl border border-[var(--line-strong)] bg-[var(--surface)] px-5 sm:px-7 h-16 z-50 shadow-sm"
         style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
       >
-        <button
-          type="button"
-          onClick={onHome}
-          title="Back to home"
-          aria-label="Back to home page"
-          className="flex items-center gap-2.5 text-left"
-        >
-          <Logo size={34} />
-          <div className="hidden sm:flex flex-col leading-none">
-            <Wordmark className="text-[16px]" />
-            <span className="mt-1 text-[11px] font-medium text-ink-2">
-              {line?.name} <span className="text-ink-3">·</span> {monthLabel(settings.activeYear, settings.activeMonth)}
-            </span>
-          </div>
-        </button>
+        <div className="flex items-center gap-3 sm:gap-6">
+          <button
+            type="button"
+            onClick={onHome}
+            title="Back to home"
+            aria-label="Back to home page"
+            className="flex items-center gap-3 text-left group py-0.5"
+          >
+            <Logo size={36} />
+            <div className="hidden sm:flex flex-col leading-tight">
+              <Wordmark className="text-[17.5px] font-black group-hover:text-[var(--accent)] transition-colors" />
+              <span className="text-[12px] font-bold text-ink-3">
+                {line?.name} <span className="text-ink-3">·</span> {monthLabel(settings.activeYear, settings.activeMonth)}
+              </span>
+            </div>
+          </button>
 
-        <span className="hidden sm:block my-3.5 w-px bg-[var(--line-strong)]" aria-hidden />
+          <span className="hidden sm:block h-7 w-px bg-[var(--line)]" aria-hidden />
 
-        <nav className="flex items-stretch gap-1" aria-label="Main">
-          {([
-            ['planner', 'Planner', <GridIcon key="i" />],
-            ['people', 'People', <PeopleIcon key="i" />],
-            ['setup', 'Setup', <GearIcon key="i" />],
-          ] as const).map(([key, label, icon]) => {
-            const active = page === key;
-            return (
-              <button
-                key={key}
-                onClick={() => setPage(key)}
-                aria-current={active ? 'page' : undefined}
-                className={cx(
-                  'group relative flex items-center gap-2 px-2.5 sm:px-3.5 text-[13.5px] font-semibold transition-colors',
-                  active ? 'text-ink' : 'text-ink-2 hover:text-ink',
-                )}
-              >
-                <span
+          {/* Segmented Pill Navigation */}
+          <nav className="flex items-center gap-1.5 bg-[var(--surface-2)] p-1.5 rounded-xl border border-[var(--line)] shadow-xs" aria-label="Main">
+            {([
+              ['planner', 'Planner', <GridIcon key="i" />],
+              ['workorders', 'Work Orders', <ClipboardIcon key="i" />],
+              ['people', 'People', <PeopleIcon key="i" />],
+              ['setup', 'Setup', <GearIcon key="i" />],
+            ] as const).map(([key, label, icon]) => {
+              const active = page === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setPage(key)}
+                  aria-current={active ? 'page' : undefined}
                   className={cx(
-                    'flex items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors',
+                    'flex items-center gap-2 px-3.5 sm:px-4 py-1.5 rounded-lg text-[13px] sm:text-[13.5px] font-bold transition-all whitespace-nowrap',
                     active
-                      ? 'bg-[color-mix(in_srgb,var(--accent)_16%,transparent)] text-[var(--accent)]'
-                      : 'group-hover:bg-[var(--surface-3)]',
+                      ? 'bg-[var(--surface)] text-ink shadow-sm border border-[var(--line-strong)]'
+                      : 'text-ink-3 hover:text-ink hover:bg-[var(--surface-3)]/60',
                   )}
                 >
-                  {icon}
-                  <span className={active ? 'text-ink' : undefined}>{label}</span>
-                </span>
-                {/* underline marks the page you are on */}
-                <span
-                  className={cx(
-                    'absolute inset-x-2 -bottom-px h-[2.5px] rounded-full transition-opacity',
-                    active ? 'bg-[var(--accent)] opacity-100' : 'opacity-0',
-                  )}
-                />
-              </button>
-            );
-          })}
-        </nav>
+                  <span className={cx('transition-colors', active ? 'text-[var(--accent)]' : 'text-ink-3')}>
+                    {icon}
+                  </span>
+                  <span>{label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </div>
 
-        <button
-          onClick={(e) => {
-            const next = settings.theme === 'dark' ? 'light' : 'dark';
-            // Paint the new theme now, animated, then save it.
-            switchTheme(next, e.currentTarget);
-            setTheme(next);
-          }}
-          title={settings.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-          aria-label={settings.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-          className="ml-auto self-center grid h-9 w-9 place-items-center overflow-hidden rounded-lg border border-[var(--line)] text-ink-2 hover:text-ink hover:bg-[var(--surface-3)] transition-colors"
-        >
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.span
-              key={settings.theme}
-              initial={{ rotate: -90, scale: 0.4, opacity: 0 }}
-              animate={{ rotate: 0, scale: 1, opacity: 1 }}
-              exit={{ rotate: 90, scale: 0.4, opacity: 0 }}
-              transition={{ duration: 0.3, ease: 'easeOut' }}
-              className="grid place-items-center"
+        <div className="flex items-center gap-2.5 sm:gap-3">
+          <LivePresence />
+
+          {/* Notifications: Supervisor Only */}
+          {session?.role === 'supervisor' && <NotificationBell />}
+
+          {/* Share Link: Supervisor Only */}
+          {session?.role === 'supervisor' && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShareOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-bold h-9 px-3.5 text-ink rounded-xl border-[var(--line-strong)] hover:border-[var(--line)] shadow-xs"
+              title="Share Password-Protected Link & Security"
             >
-              {settings.theme === 'dark' ? <SunIcon /> : <MoonIcon />}
-            </motion.span>
-          </AnimatePresence>
-        </button>
+              <span>🔗</span>
+              <span className="hidden md:inline">Share Link</span>
+            </Button>
+          )}
+
+          {/* User badge & Lock button */}
+          <div className="flex items-center gap-2.5 pl-2.5 border-l border-[var(--line)]">
+            <div
+              className="hidden xl:flex flex-col text-right leading-tight max-w-[130px]"
+              title={`Signed in as ${session?.name ?? 'User'} (${session?.role ?? 'viewer'})`}
+            >
+              <span className="truncate text-[12px] font-bold text-ink">
+                {session?.name ? session.name.replace(/ \/ Operations Lead/g, '') : 'Supervisor'}
+              </span>
+              <span className="text-[10px] font-black uppercase tracking-wider text-[var(--accent)]">
+                {session?.role === 'supervisor' ? 'Supervisor' : 'Collaborator'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={logout}
+              title="Lock Screen / Sign Out"
+              aria-label="Lock Screen / Sign Out"
+              className="grid h-9 w-9 place-items-center rounded-xl border border-[var(--line-strong)] bg-[var(--surface-2)] text-ink-2 hover:text-amber-400 hover:bg-[var(--surface-3)] transition-all shadow-xs"
+            >
+              <span className="text-[13px]" role="img" aria-label="Lock">
+                🔒
+              </span>
+            </button>
+          </div>
+
+          <button
+            onClick={(e) => {
+              const next = settings.theme === 'dark' ? 'light' : 'dark';
+              // Paint the new theme now, animated, then save it.
+              switchTheme(next, e.currentTarget);
+              setTheme(next);
+            }}
+            title={settings.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            aria-label={settings.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            className="grid h-9 w-9 place-items-center overflow-hidden rounded-xl border border-[var(--line-strong)] bg-[var(--surface-2)] text-ink-2 hover:text-ink hover:bg-[var(--surface-3)] transition-all shadow-xs"
+          >
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.span
+                key={settings.theme}
+                initial={{ rotate: -90, scale: 0.4, opacity: 0 }}
+                animate={{ rotate: 0, scale: 1, opacity: 1 }}
+                exit={{ rotate: 90, scale: 0.4, opacity: 0 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
+                className="grid place-items-center"
+              >
+                {settings.theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+              </motion.span>
+            </AnimatePresence>
+          </button>
+        </div>
       </header>
 
       {page === 'planner' && <PlannerPage />}
+      {page === 'workorders' && <WorkOrdersPage />}
       {page === 'people' && <PeoplePage />}
       {page === 'setup' && <SetupPage />}
       <AssistantWidget />
+      <ShareSecurityModal open={shareOpen} onClose={() => setShareOpen(false)} />
     </div>
+  );
+}
+
+function ClipboardIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+      <path d="M9 12h6" />
+      <path d="M9 16h6" />
+    </svg>
   );
 }
 

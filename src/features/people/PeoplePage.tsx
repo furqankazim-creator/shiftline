@@ -5,6 +5,7 @@ import { codeVars } from '@/app/tones';
 import { Button, Field, Input, Modal, Select, Switch, cx, useToast } from '@/components/ui';
 import { newId } from '@/data/db';
 import { WEEKDAY_LABELS, daysInMonth, monthKey, monthLabel } from '@/domain/calendar';
+import { isLeaderEmployee } from '@/domain/rotation';
 import type { Employee, LeaveBlock, RotationRule, Weekday } from '@/domain/types';
 
 /**
@@ -88,6 +89,12 @@ export function PeoplePage() {
                   <span className="flex items-center gap-2 min-w-0">
                     <span className="h-4 w-[3px] rounded-full shrink-0" style={{ background: tone.accent }} />
                     <span className="truncate text-[13px] font-medium">{employee.name}</span>
+                    {isLeaderEmployee(employee) && (
+                      <span className="shrink-0 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-px text-[9.5px] uppercase tracking-wide font-semibold flex items-center gap-0.5">
+                        <span>👑</span>
+                        <span>Leader</span>
+                      </span>
+                    )}
                     {employee.pinned && (
                       <span className="shrink-0 rounded bg-[var(--surface-3)] px-1.5 py-px text-[9.5px] uppercase tracking-wide text-ink-3">
                         fixed
@@ -219,7 +226,12 @@ function EmployeeEditor({
               ))}
             </Select>
           </Field>
-          <div className="flex items-end pb-2">
+          <div className="flex flex-col gap-2 pb-2 justify-end">
+            <Switch
+              checked={draft.isLeader ?? isLeaderEmployee(draft)}
+              onChange={(v) => setDraft({ ...draft, isLeader: v })}
+              label="Team Leader (rotates on 2-week cycle)"
+            />
             <Switch
               checked={!!draft.pinned}
               onChange={(v) => setDraft({ ...draft, pinned: v })}

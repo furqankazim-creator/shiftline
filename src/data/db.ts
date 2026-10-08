@@ -1,7 +1,24 @@
 import Dexie, { type EntityTable } from 'dexie';
 
-import type { Employee, LeaveBlock, Line, RosterMonth, SheetLayout, ShiftCode } from '@/domain/types';
-import { SEED_CODES, SEED_EMPLOYEES, SEED_LEAVE, SEED_LINES } from './seed';
+import type {
+  AllocationRecord,
+  Employee,
+  LeaveBlock,
+  Line,
+  ResourceRequirement,
+  RosterMonth,
+  SheetLayout,
+  ShiftCode,
+  WorkOrder,
+} from '@/domain/types';
+import {
+  SEED_CODES,
+  SEED_EMPLOYEES,
+  SEED_LEAVE,
+  SEED_LINES,
+  SEED_RESOURCE_REQUIREMENTS,
+  SEED_WORK_ORDERS,
+} from './seed';
 
 export type FontSize = 'xs' | 'compact' | 'normal' | 'large' | 'xl';
 export type FontFamily =
@@ -112,6 +129,12 @@ class RosterDB extends Dexie {
   layouts!: EntityTable<StoredLayout, 'rosterId'>;
   /** Codes added to a single month's brush that its grid does not use yet. */
   monthCodes!: EntityTable<StoredMonthCodes, 'rosterId'>;
+  /** Ingested Work Orders (Nov-Workorders.xlsx) */
+  workOrders!: EntityTable<WorkOrder, 'id'>;
+  /** Shift-level resource requirement rules (PM / CM / ACS per line) */
+  resourceRequirements!: EntityTable<ResourceRequirement, 'id'>;
+  /** Named allocations audit log */
+  allocations!: EntityTable<AllocationRecord, 'id'>;
 
   constructor() {
     super('shiftline');
@@ -204,6 +227,18 @@ class RosterDB extends Dexie {
         if (c.scope && c.scope.includes(':')) await table.delete(c.key);
       }
     });
+
+    // v7: Work Orders & Resource Requirements integration (November work orders + October patterns)
+    this.version(7).stores({
+      workOrders: 'id, workOrderId, line, workType, status, plannedDay, plannedShift',
+      resourceRequirements: 'id, line, workType, shift',
+      allocations: 'id, workOrderId, personId, allocatedDate, shift',
+    }).upgrade(async (tx) => {
+      const woTable = tx.table('workOrders');
+      const rrTable = tx.table('resourceRequirements');
+      await rrTable.bulkPut(SEED_RESOURCE_REQUIREMENTS);
+      await woTable.bulkPut(SEED_WORK_ORDERS);
+    });
   }
 }
 
@@ -218,6 +253,20 @@ export const db = new RosterDB();
  */
 export async function ensureSeeded(): Promise<void> {
   const existing = await db.settings.get('app');
+
+  // Always ensure line 6 is present in lines table
+  await db.lines.bulkPut(SEED_LINES);
+
+  // Ensure work orders and resource requirements are present
+  const woCount = await db.workOrders.count();
+  if (woCount === 0) {
+    await db.workOrders.bulkPut(SEED_WORK_ORDERS);
+  }
+  const rrCount = await db.resourceRequirements.count();
+  if (rrCount === 0) {
+    await db.resourceRequirements.bulkPut(SEED_RESOURCE_REQUIREMENTS);
+  }
+
   if (existing?.seeded) return;
 
   await db.transaction('rw', db.lines, db.employees, db.shiftCodes, db.leave, db.settings, async () => {

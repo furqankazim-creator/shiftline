@@ -39,6 +39,8 @@ export function Toolbar({
   const compact = viewport !== 'desktop';
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const [displayOpen, setDisplayOpen] = useState(false);
+  const displayRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -48,6 +50,15 @@ export function Toolbar({
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!displayOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!displayRef.current?.contains(e.target as Node)) setDisplayOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [displayOpen]);
 
   const years = Array.from({ length: 7 }, (_, i) => settings.activeYear - 2 + i);
 
@@ -140,66 +151,112 @@ export function Toolbar({
 
         <div className="mx-1 h-5 w-px bg-[var(--line)] hidden md:block" />
 
-        {/* Zoom In/Out controls */}
-        <div
-          className="hidden md:flex items-center rounded-lg border border-[var(--line)] bg-[var(--surface-2)] h-7 px-1 text-[11.5px]"
-          title="Screen Zoom: Adjust roster grid size"
-        >
-          <button
-            onClick={() => void updateSettings({ zoomLevel: Math.max(70, (settings.zoomLevel ?? 100) - 10) })}
-            className="h-5 w-5 grid place-items-center rounded hover:bg-[var(--surface-3)] text-ink-2 hover:text-ink font-bold"
-            title="Zoom Out (−10%)"
+        {/* Display / View Settings Popover */}
+        <div ref={displayRef} className="relative hidden md:block">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setDisplayOpen((v) => !v)}
+            className={cx(
+              'flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[12.5px] font-bold transition-all shadow-xs',
+              displayOpen && 'bg-[var(--surface-3)] border-[var(--accent)] text-ink',
+            )}
+            title="Screen Zoom, Font Size & Typography Settings"
           >
-            −
-          </button>
-          <button
-            onClick={() => void updateSettings({ zoomLevel: 100 })}
-            className="px-1.5 font-mono text-[11px] text-ink-2 hover:text-ink"
-            title="Reset zoom to 100%"
-          >
-            {settings.zoomLevel ?? 100}%
-          </button>
-          <button
-            onClick={() => void updateSettings({ zoomLevel: Math.min(140, (settings.zoomLevel ?? 100) + 10) })}
-            className="h-5 w-5 grid place-items-center rounded hover:bg-[var(--surface-3)] text-ink-2 hover:text-ink font-bold"
-            title="Zoom In (+10%)"
-          >
-            +
-          </button>
+            <span className="font-black text-[13px] text-[var(--accent)]">Aa</span>
+            <span className="text-ink-2 font-mono font-semibold">{settings.zoomLevel ?? 100}%</span>
+          </Button>
+
+          <AnimatePresence>
+            {displayOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: 4, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 4, scale: 0.98 }}
+                transition={{ duration: 0.15 }}
+                className="absolute left-0 top-full mt-2 z-40 w-64 rounded-2xl border border-[var(--line-strong)] bg-[var(--surface)] p-3.5 shadow-2xl space-y-3"
+              >
+                <div>
+                  <span className="text-[11px] font-black uppercase tracking-wider text-ink-3 block mb-1.5">
+                    Screen Zoom
+                  </span>
+                  <div className="flex items-center justify-between bg-[var(--surface-2)] p-1 rounded-xl border border-[var(--line)]">
+                    <button
+                      type="button"
+                      onClick={() => void updateSettings({ zoomLevel: Math.max(70, (settings.zoomLevel ?? 100) - 10) })}
+                      className="w-8 h-7 flex items-center justify-center font-bold text-ink-2 hover:text-ink rounded-lg hover:bg-[var(--surface-3)] text-[14px]"
+                      title="Zoom Out (−10%)"
+                    >
+                      −
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void updateSettings({ zoomLevel: 100 })}
+                      className="font-mono text-[12px] font-bold text-ink hover:underline"
+                      title="Reset to 100%"
+                    >
+                      {settings.zoomLevel ?? 100}%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void updateSettings({ zoomLevel: Math.min(140, (settings.zoomLevel ?? 100) + 10) })}
+                      className="w-8 h-7 flex items-center justify-center font-bold text-ink-2 hover:text-ink rounded-lg hover:bg-[var(--surface-3)] text-[14px]"
+                      title="Zoom In (+10%)"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <span className="text-[11px] font-black uppercase tracking-wider text-ink-3 block mb-1.5">
+                    Font Size
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {(['xs', 'compact', 'normal', 'large', 'xl'] as const).map((sz) => (
+                      <button
+                        key={sz}
+                        type="button"
+                        onClick={() => void updateSettings({ fontSize: sz })}
+                        className={cx(
+                          'px-2 py-1 rounded-lg text-[11px] font-bold uppercase transition-all',
+                          (settings.fontSize ?? 'normal') === sz
+                            ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-black shadow-xs'
+                            : 'bg-[var(--surface-2)] text-ink-2 hover:text-ink',
+                        )}
+                      >
+                        {sz}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <span className="text-[11px] font-black uppercase tracking-wider text-ink-3 block mb-1.5">
+                    Font Family
+                  </span>
+                  <Select
+                    value={settings.fontFamily ?? 'default'}
+                    onChange={(e) => void updateSettings({ fontFamily: e.target.value as any })}
+                    className="w-full h-8 text-[12px] font-medium border-[var(--line)] bg-[var(--surface-2)]"
+                  >
+                    <option value="default">Inter (Default)</option>
+                    <option value="roboto">Roboto</option>
+                    <option value="segoe">Segoe UI / Aptos</option>
+                    <option value="apple">SF Pro (Apple)</option>
+                    <option value="open-sans">Open Sans</option>
+                    <option value="plex">IBM Plex Sans</option>
+                    <option value="mono">JetBrains Mono</option>
+                    <option value="calibri">Calibri</option>
+                    <option value="serif">Georgia (Serif)</option>
+                  </Select>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
-        {/* Font size & family selection */}
-        <div className="hidden xl:flex items-center gap-1.5">
-          <Select
-            value={settings.fontSize ?? 'normal'}
-            onChange={(e) => void updateSettings({ fontSize: e.target.value as any })}
-            className="h-7 text-[11.5px] border-[var(--line)] bg-[var(--surface-2)]"
-            title="Font Size Selection"
-          >
-            <option value="xs">Aa Extra Compact (11.5px)</option>
-            <option value="compact">Aa Compact (13px)</option>
-            <option value="normal">Aa Normal (14px)</option>
-            <option value="large">Aa Large (15.5px)</option>
-            <option value="xl">Aa Extra Large (17px)</option>
-          </Select>
 
-          <Select
-            value={settings.fontFamily ?? 'default'}
-            onChange={(e) => void updateSettings({ fontFamily: e.target.value as any })}
-            className="h-7 text-[11.5px] border-[var(--line)] bg-[var(--surface-2)]"
-            title="Font Family Selection"
-          >
-            <option value="default">Font: Inter (Default)</option>
-            <option value="roboto">Font: Roboto</option>
-            <option value="segoe">Font: Segoe UI / Aptos</option>
-            <option value="apple">Font: SF Pro (Apple)</option>
-            <option value="open-sans">Font: Open Sans</option>
-            <option value="plex">Font: IBM Plex Sans</option>
-            <option value="mono">Font: JetBrains Mono</option>
-            <option value="calibri">Font: Calibri</option>
-            <option value="serif">Font: Georgia (Serif)</option>
-          </Select>
-        </div>
 
         <div className="mx-1 h-5 w-px bg-[var(--line)] hidden sm:block" />
 

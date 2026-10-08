@@ -107,6 +107,84 @@ describe('autoRotate', () => {
     expect(worstGap).toBeLessThan(spread + 1);
     expect(worstGap).toBeLessThanOrEqual(60);
   });
+
+  describe('leaders_only 2-week cycle rotation', () => {
+    it('rotates only designated team leaders while keeping engineers steady', () => {
+      const result = autoRotate({
+        year: 2026,
+        month: 10,
+        employees: SEED_EMPLOYEES,
+        codes: SEED_CODES,
+        history,
+        targetScope: 'leaders_only',
+        patternMode: 'two_week_cycle',
+      });
+
+      expect(result.leadersRotated?.length).toBe(6);
+      expect(result.engineersKeptFixed?.length).toBe(SEED_EMPLOYEES.length - 6);
+
+      // Verify each leader has 2-week rotation blocks
+      for (const leaderId of result.leadersRotated ?? []) {
+        const rules = result.rotationRules?.[leaderId];
+        expect(rules).toBeDefined();
+        expect(rules).toHaveLength(2);
+        expect(rules![0].fromDay).toBe(1);
+        expect(rules![0].toDay).toBe(14);
+        expect(rules![1].fromDay).toBe(15);
+        expect(rules![1].toDay).toBe(31); // October has 31 days
+      }
+
+      // Verify engineers keep their regular default shift
+      for (const engId of result.engineersKeptFixed ?? []) {
+        const emp = SEED_EMPLOYEES.find((e) => e.id === engId)!;
+        expect(result.assignments[engId]).toBe(emp.defaultShift);
+        expect(result.rotationRules?.[engId]).toBeUndefined();
+      }
+    });
+
+    it('generates roster respecting weekend off and 2-week shift transitions', () => {
+      const result = autoRotate({
+        year: 2026,
+        month: 10,
+        employees: SEED_EMPLOYEES,
+        codes: SEED_CODES,
+        history,
+        targetScope: 'leaders_only',
+        patternMode: 'two_week_cycle',
+      });
+
+      const updatedEmployees = SEED_EMPLOYEES.map((e) => ({
+        ...e,
+        rotations: {
+          '2026-10': result.rotationRules?.[e.id] ?? [],
+        },
+      }));
+
+      const roster = generateMonth({
+        year: 2026,
+        month: 10,
+        lineId: 'line5',
+        employees: updatedEmployees,
+      });
+
+      const e06Cells = roster.cells['e06'];
+      expect(e06Cells).toBeDefined();
+      const rules = result.rotationRules?.['e06']!;
+      expect(rules).toHaveLength(2);
+
+      // Days on rest days are '-' (OFF), working days follow 2-week block rules
+      for (let day = 1; day <= 31; day++) {
+        const cell = e06Cells[day - 1];
+        if (cell.source === 'rest') {
+          expect(cell.code).toBe('-');
+        } else if (day <= 14) {
+          expect(cell.code).toBe(rules[0].code);
+        } else {
+          expect(cell.code).toBe(rules[1].code);
+        }
+      }
+    });
+  });
 });
 
 describe('fairness', () => {
