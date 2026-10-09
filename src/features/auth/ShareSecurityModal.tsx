@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { Button, Input, Modal, useToast } from '@/components/ui';
 
-import { DEFAULT_ASSIGNED_PASSCODES, useAuth } from './authStore';
+import { useAuth } from './authStore';
 import { AssignedPasscode, getAssignedUrl, UserRole } from './types';
 
 interface Props {
@@ -14,11 +14,7 @@ export function ShareSecurityModal({ open, onClose }: Props) {
   const { session, securitySettings, updateSecuritySettings, activeUsers } = useAuth();
   const toast = useToast();
 
-  // Tab mode: 'assign' (personalized link for someone) vs 'general' (default team passcode)
-  const [tab, setTab] = useState<'assign' | 'general'>('assign');
-
-  // General shared passcode
-  const [passcode, setPasscode] = useState(securitySettings.sharedPasscode);
+  // Login alert rules
   const [notifyOnLogin, setNotifyOnLogin] = useState(securitySettings.notifyOnLogin);
   const [soundAlert, setSoundAlert] = useState(securitySettings.soundAlert);
   const [requireName, setRequireName] = useState(securitySettings.requireName);
@@ -31,21 +27,17 @@ export function ShareSecurityModal({ open, onClose }: Props) {
 
   // Assigned passcodes list (synced with Setup page)
   const [assignedList, setAssignedList] = useState<AssignedPasscode[]>(
-    securitySettings.assignedPasscodes && securitySettings.assignedPasscodes.length > 0
-      ? securitySettings.assignedPasscodes
-      : DEFAULT_ASSIGNED_PASSCODES,
+    securitySettings.assignedPasscodes ?? [],
   );
 
   // Sync with store on mount / external update
   useEffect(() => {
-    setPasscode(securitySettings.sharedPasscode);
     setNotifyOnLogin(securitySettings.notifyOnLogin);
     setSoundAlert(securitySettings.soundAlert);
     setRequireName(securitySettings.requireName);
-    if (securitySettings.assignedPasscodes && securitySettings.assignedPasscodes.length > 0) {
-      setAssignedList(securitySettings.assignedPasscodes);
-    }
+    setAssignedList(securitySettings.assignedPasscodes ?? []);
   }, [securitySettings]);
+
 
   if (session?.role !== 'supervisor') {
     return null;
@@ -69,23 +61,10 @@ export function ShareSecurityModal({ open, onClose }: Props) {
     toast(`Generated passcode: ${newCode}`, 'ok');
   };
 
-  const handleGenerateGeneralCode = () => {
-    const newCode = `shift-${Math.floor(1000 + Math.random() * 9000)}`;
-    setPasscode(newCode);
-    toast(`Generated new general passcode: ${newCode}`, 'ok');
-  };
-
   // URL for the personalized link
   const currentPersonalUrl = useMemo(() => {
-    const code = recipientCode.trim() || passcode.trim() || 'shiftline2026';
-    return getAssignedUrl(code, recipientName.trim() || undefined);
-  }, [recipientCode, passcode, recipientName]);
-
-  // General share URL
-  const generalShareUrl = useMemo(() => {
-    const code = passcode.trim() || 'shiftline2026';
-    return getAssignedUrl(code, 'General Team & Clients');
-  }, [passcode]);
+    return getAssignedUrl(recipientCode.trim(), recipientName.trim() || undefined);
+  }, [recipientCode, recipientName]);
 
   // Check if an assigned person is currently online
   const isOnline = (name: string) => {
@@ -101,7 +80,19 @@ export function ShareSecurityModal({ open, onClose }: Props) {
   const persistAssignedEntry = (name: string, code: string, role: UserRole, notes?: string) => {
     const cleanName = name.trim();
     const cleanCode = code.trim();
-    if (!cleanName || !cleanCode) return assignedList;
+    if (!cleanName || !cleanCode) {
+      toast('Enter both a name and a passcode for this person.', 'error');
+      return null;
+    }
+    const clash = assignedList.find(
+      (a) =>
+        a.passcode.trim().toLowerCase() === cleanCode.toLowerCase() &&
+        a.assignedTo.toLowerCase() !== cleanName.toLowerCase(),
+    );
+    if (clash) {
+      toast(`Passcode "${cleanCode}" is already assigned to ${clash.assignedTo}. Use a different one.`, 'error');
+      return null;
+    }
 
     const existingIdx = assignedList.findIndex(
       (a) => a.assignedTo.toLowerCase() === cleanName.toLowerCase(),
@@ -130,32 +121,20 @@ export function ShareSecurityModal({ open, onClose }: Props) {
 
   const handleCopyPersonalLink = async () => {
     const cleanName = recipientName.trim();
-    const cleanCode = recipientCode.trim() || passcode.trim() || 'shiftline2026';
-
-    if (cleanName) {
-      persistAssignedEntry(cleanName, cleanCode, recipientRole, recipientNote);
-    }
+    if (!persistAssignedEntry(cleanName, recipientCode, recipientRole, recipientNote)) return;
 
     try {
       await navigator.clipboard.writeText(currentPersonalUrl);
-      toast(
-        cleanName
-          ? `Direct link for ${cleanName} copied & saved to Setup table!`
-          : 'Protected link copied to clipboard!',
-        'ok',
-      );
+      toast(`Direct link for ${cleanName} copied & saved to Setup!`, 'ok');
     } catch {
       toast('Could not copy link to clipboard.', 'error');
     }
   };
 
   const handleCopyPersonalInvite = async () => {
-    const cleanName = recipientName.trim() || 'Team Member';
-    const cleanCode = recipientCode.trim() || passcode.trim() || 'shiftline2026';
-
-    if (recipientName.trim()) {
-      persistAssignedEntry(recipientName, cleanCode, recipientRole, recipientNote);
-    }
+    const cleanName = recipientName.trim();
+    const cleanCode = recipientCode.trim();
+    if (!persistAssignedEntry(cleanName, cleanCode, recipientRole, recipientNote)) return;
 
     const inviteText = `ShiftLine Protected Roster Access:
 👤 Assigned To: ${cleanName}
@@ -169,30 +148,6 @@ export function ShareSecurityModal({ open, onClose }: Props) {
       toast(`Full invite for ${cleanName} copied & saved to Setup!`, 'ok');
     } catch {
       toast('Could not copy invite to clipboard.', 'error');
-    }
-  };
-
-  const handleCopyGeneralLink = async () => {
-    try {
-      await navigator.clipboard.writeText(generalShareUrl);
-      toast('General roster link copied to clipboard!', 'ok');
-    } catch {
-      toast('Could not copy link.', 'error');
-    }
-  };
-
-  const handleCopyGeneralInvite = async () => {
-    const cleanCode = passcode.trim() || 'shiftline2026';
-    const inviteText = `ShiftLine Roster Access:
-🔑 Passcode: ${cleanCode}
-🔗 Link: ${generalShareUrl}
-(Enter your name and this passcode to open the schedule)`;
-
-    try {
-      await navigator.clipboard.writeText(inviteText);
-      toast('General invite copied to clipboard!', 'ok');
-    } catch {
-      toast('Could not copy invite.', 'error');
     }
   };
 
@@ -228,50 +183,30 @@ export function ShareSecurityModal({ open, onClose }: Props) {
   };
 
   const handleSaveSettings = () => {
-    let nextAssigned = [...assignedList];
+    let nextAssigned = assignedList;
     const cleanName = recipientName.trim();
-    const cleanCode = recipientCode.trim() || passcode.trim() || 'shiftline2026';
 
-    // If recipient name is provided, save or update their assigned passcode record
-    if (cleanName) {
-      const existingIdx = nextAssigned.findIndex(
-        (a) => a.assignedTo.toLowerCase() === cleanName.toLowerCase(),
-      );
-      const newEntry: AssignedPasscode = {
-        id: existingIdx >= 0 ? nextAssigned[existingIdx].id : `assign-${Date.now()}`,
-        assignedTo: cleanName,
-        passcode: cleanCode,
-        role: recipientRole,
-        createdAt: Date.now(),
-        status: 'active',
-        notes: recipientNote.trim() || `${cleanName} direct link`,
-      };
-      if (existingIdx >= 0) {
-        nextAssigned[existingIdx] = newEntry;
-      } else {
-        nextAssigned = [newEntry, ...nextAssigned];
-      }
+    // A filled-in draft is saved as that person's passcode
+    if (cleanName || recipientCode.trim()) {
+      const saved = persistAssignedEntry(cleanName, recipientCode, recipientRole, recipientNote);
+      if (!saved) return;
+      nextAssigned = saved;
     }
 
-    // Sync general team entry with current sharedPasscode
-    const cleanSharedPasscode = passcode.trim() || 'shiftline2026';
-    nextAssigned = nextAssigned.map((item) =>
-      item.id === 'assign-general' ? { ...item, passcode: cleanSharedPasscode } : item,
-    );
-
     updateSecuritySettings({
-      sharedPasscode: cleanSharedPasscode,
       assignedPasscodes: nextAssigned,
       notifyOnLogin,
       soundAlert,
       requireName,
     });
-    setAssignedList(nextAssigned);
 
+    setRecipientName('');
+    setRecipientCode('');
+    setRecipientNote('');
     toast(
       cleanName
-        ? `Saved! Password and details for "${cleanName}" are now recorded in Setup.`
-        : 'Security settings & passcodes saved to Setup successfully!',
+        ? `Saved! Password for "${cleanName}" is now recorded in Setup.`
+        : 'Security settings saved to Setup.',
       'ok',
     );
     onClose();
@@ -282,7 +217,7 @@ export function ShareSecurityModal({ open, onClose }: Props) {
       open={open}
       onClose={onClose}
       title="Share Link & Access Security"
-      description="Create personalized passwords & direct links, manage team passcodes, and monitor who has access."
+      description="Give each person their own password & direct link, and see who has access."
       width={640}
       footer={
         <div className="flex items-center justify-between w-full">
@@ -296,34 +231,7 @@ export function ShareSecurityModal({ open, onClose }: Props) {
       }
     >
       <div className="space-y-4 text-ink text-xs max-h-[75vh] overflow-y-auto pr-1">
-        {/* Navigation Tabs */}
-        <div className="flex items-center p-1 rounded-xl bg-[var(--surface-3)] border border-[var(--line)]">
-          <button
-            type="button"
-            onClick={() => setTab('assign')}
-            className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-all ${
-              tab === 'assign'
-                ? 'bg-[var(--surface)] text-ink shadow-sm'
-                : 'text-ink-2 hover:text-ink'
-            }`}
-          >
-            👤 Assign Password to Person / Team
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab('general')}
-            className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold transition-all ${
-              tab === 'general'
-                ? 'bg-[var(--surface)] text-ink shadow-sm'
-                : 'text-ink-2 hover:text-ink'
-            }`}
-          >
-            🌐 Default Shared Passcode
-          </button>
-        </div>
-
-        {/* Tab 1: Personalized Assign */}
-        {tab === 'assign' && (
+        {/* Create a personal password & link */}
           <div className="p-4 rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/60 space-y-3.5">
             <div className="flex items-center justify-between">
               <div>
@@ -436,74 +344,6 @@ export function ShareSecurityModal({ open, onClose }: Props) {
               </div>
             </div>
           </div>
-        )}
-
-        {/* Tab 2: General Shared Passcode */}
-        {tab === 'general' && (
-          <div className="p-4 rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/60 space-y-3.5">
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="font-semibold text-ink text-xs block">
-                  Default Fallback Passcode
-                </span>
-                <span className="text-[11px] text-ink-3 block">
-                  Used for general team members or clients without a personalized link.
-                </span>
-              </div>
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-400">
-                Standard Shared
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Input
-                type="text"
-                value={passcode}
-                onChange={(e) => setPasscode(e.target.value)}
-                placeholder="Enter passcode, e.g. shiftline2026"
-                className="bg-[var(--surface-3)] font-mono font-bold text-xs h-8"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleGenerateGeneralCode}
-                className="shrink-0 h-8 text-xs font-semibold"
-              >
-                Generate New
-              </Button>
-            </div>
-
-            <div className="pt-1">
-              <label className="text-[11px] font-semibold text-ink-2 mb-1 block">
-                General Roster Link
-              </label>
-              <div className="flex items-center gap-2">
-                <Input
-                  type="text"
-                  readOnly
-                  value={generalShareUrl}
-                  className="bg-[var(--surface-3)] font-mono text-[11px] select-all text-ink-2 h-8"
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCopyGeneralLink}
-                  className="shrink-0 h-8 text-xs font-semibold"
-                >
-                  Copy Link
-                </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={handleCopyGeneralInvite}
-                  className="shrink-0 h-8 text-xs font-semibold"
-                >
-                  Copy Invite
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Section: Assigned Passwords & Direct Links (Live Table from Setup) */}
         <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/40 overflow-hidden divide-y divide-[var(--line)]">
@@ -522,9 +362,13 @@ export function ShareSecurityModal({ open, onClose }: Props) {
           </div>
 
           <div className="divide-y divide-[var(--line)] max-h-52 overflow-y-auto">
+            {assignedList.length === 0 && (
+              <div className="px-3.5 py-4 text-[11px] text-ink-3 text-center">
+                No one has a passcode yet. Add a person above, then Save.
+              </div>
+            )}
             {assignedList.map((item) => {
               const online = isOnline(item.assignedTo);
-              const isGeneral = item.id === 'assign-general';
 
               return (
                 <div
@@ -533,11 +377,7 @@ export function ShareSecurityModal({ open, onClose }: Props) {
                 >
                   <div className="flex items-center gap-2.5 min-w-[140px]">
                     <div
-                      className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-[11px] text-white shrink-0 ${
-                        isGeneral
-                          ? 'bg-slate-600'
-                          : 'bg-gradient-to-br from-indigo-500 to-purple-600'
-                      }`}
+                      className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-[11px] text-white shrink-0 bg-gradient-to-br from-indigo-500 to-purple-600"
                     >
                       {item.assignedTo.charAt(0).toUpperCase()}
                     </div>
@@ -583,8 +423,7 @@ export function ShareSecurityModal({ open, onClose }: Props) {
                     >
                       Copy Invite
                     </Button>
-                    {!isGeneral && (
-                      <button
+                    <button
                         type="button"
                         onClick={() => handleRevokeItem(item.id)}
                         className="text-[11px] text-rose-400 hover:text-rose-300 font-semibold px-1.5"
@@ -592,13 +431,13 @@ export function ShareSecurityModal({ open, onClose }: Props) {
                       >
                         Revoke
                       </button>
-                    )}
                   </div>
                 </div>
               );
             })}
           </div>
         </div>
+
 
         {/* Section: Login Alerts & Notification Rules */}
         <div className="p-3.5 rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/60 space-y-2.5">

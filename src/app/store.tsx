@@ -4,7 +4,10 @@ import {
   type ReactNode,
 } from 'react';
 
-import { DEFAULT_SETTINGS, codeKey, db, ensureSeeded, newId, patchSettings, seedCodesForLine, type Settings } from '@/data/db';
+import {
+  DEFAULT_SETTINGS, codeKey, db, ensureSeeded, getSettings, newId, patchSettings, seedCodesForLine,
+  type Settings, type WorkOrderImportReport,
+} from '@/data/db';
 import { buildColumns, daysInMonth, monthKey, shiftMonth } from '@/domain/calendar';
 import {
   generateMonth, rosterId, setCell as setCellPure, setExtraHours as setExtraHoursPure,
@@ -15,7 +18,6 @@ import { autoRotate, buildHistory, fairness, type AutoRotateResult } from '@/dom
 import { summarise } from '@/domain/summary';
 import { OFF } from '@/domain/types';
 import type {
-  AllocationRecord,
   Employee,
   Issue,
   LeaveBlock,
@@ -23,11 +25,14 @@ import type {
   ResourceRequirement,
   RosterMonth,
   ShiftCode,
-  ShiftWorkloadBalance,
   WorkOrder,
 } from '@/domain/types';
 import { validate } from '@/domain/validate';
-import { allocateWorkOrdersToRoster, parseWorkOrdersWorkbook } from '@/domain/workload';
+import { parseWorkOrdersWorkbook } from '@/domain/workload';
+import { allWorkOrderColumns } from '@/domain/workOrderColumns';
+import {
+  POOL_LINES, SHIFT_LABEL, codeFamily, computeWorkload, poolOfLineId, staffOnShift, type ShiftFamily, type WorkloadResult,
+} from '@/domain/workloadLive';
 import { useOptionalAuth } from '@/features/auth/authStore';
 
 interface RosterStore {
@@ -99,11 +104,18 @@ interface RosterStore {
   // Work Orders & Resource Requirements Integration
   workOrders: WorkOrder[];
   resourceRequirements: ResourceRequirement[];
-  allocations: AllocationRecord[];
-  shiftBalances: ShiftWorkloadBalance[];
-  workloadConflicts: any[];
-  uploadWorkOrders(buffer: ArrayBuffer): Promise<{ count: number }>;
-  allocateResources(): Promise<void>;
+  /**
+   * Live staffing of every work order against the Planner roster of its own
+   * line, date and shift. Recomputed on every roster / people / code / work
+   * order change — see domain/workloadLive.ts.
+   */
+  workload: WorkloadResult;
+  /** People of a line's staff pool (Line 4 & 6 together) on a shift family on an ISO date, as the Planner shows it. */
+  staffForShift(lineId: string, isoDate: string, shift: ShiftFamily): Employee[];
+  /** Shift codes per line id (for timings / shift families). */
+  codesByLine: Record<string, ShiftCode[]>;
+  /** Replaces all work orders from an Excel file and records an import report in settings. */
+  uploadWorkOrders(buffer: ArrayBuffer, fileName?: string): Promise<WorkOrderImportReport>;
   saveWorkOrder(wo: WorkOrder): Promise<void>;
   saveResourceRequirement(rr: ResourceRequirement): Promise<void>;
   removeWorkOrder(id: string): Promise<void>;
@@ -297,7 +309,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [roster, codes, nDays],
   );
 
-  const issues = useMemo(
+  const ruleIssues = useMemo(
     () =>
       roster
         ? validate({
@@ -628,48 +640,165 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Work Orders & Workload Integration
   const workOrders = useLiveQuery(() => db.workOrders.toArray(), [], []) ?? [];
   const resourceRequirements = useLiveQuery(() => db.resourceRequirements.toArray(), [], []) ?? [];
-  const allocations = useLiveQuery(() => db.allocations.toArray(), [], []) ?? [];
 
-  const { shiftBalances, conflicts: workloadConflicts } = useMemo(() => {
-    return allocateWorkOrdersToRoster({
-      lineId: activeLineId,
-      year: activeYear,
-      month: activeMonth,
-      roster,
-      employees,
-      workOrders,
-      requirements: resourceRequirements,
+  // Every line's people and stored months: work orders span all lines and months,
+  // not just the one open in the Planner.
+  const allEmployees = useLiveQuery(() => db.employees.toArray(), [], []) ?? [];
+  const allRosters = useLiveQuery(() => db.rosters.toArray(), [], []) ?? [];
+
+  const codesByLine = useMemo(() => {
+    const map: Record<string, ShiftCode[]> = {};
+    for (const c of allCodes) if (c.scope) (map[c.scope] ??= []).push(c);
+    return map;
+  }, [allCodes]);
+
+  const { workload, staffForShift } = useMemo(() => {
+    const employeesByLine: Record<string, Employee[]> = {};
+    for (const e of [...allEmployees].sort((x, y) => x.order - y.order)) (employeesByLine[e.lineId] ??= []).push(e);
+    const storedById = new Map(allRosters.map((r) => [r.id, r]));
+    const cache = new Map<string, RosterMonth>();
+
+    // Exactly what the Planner shows for that line & month: the open month is
+    // the live grid; any other month is rebuilt the same way the Planner loads
+    // it (people's rules + leave + saved hand edits).
+    const getRoster = (lineId: string, year: number, month: number): RosterMonth | null => {
+      if (lineId === activeLineId && year === activeYear && month === activeMonth && roster) return roster;
+      const people = employeesByLine[lineId] ?? [];
+      if (!people.length || !year || !month) return null;
+      const key = rosterId(lineId, year, month);
+      let r = cache.get(key);
+      if (!r) {
+        const stored = storedById.get(key);
+        const ids = new Set(people.map((e) => e.id));
+        r = generateMonth({
+          year, month, lineId, employees: people,
+          leaveBlocks: leave.filter((l) => ids.has(l.employeeId)),
+          overrides: stored?.overrides ?? {}, extraHours: stored?.extraHours ?? {},
+        });
+        cache.set(key, r);
+      }
+      return r;
+    };
+
+    const result = computeWorkload({
+      workOrders, getRoster, employeesByLine, codesByLine, requirements: resourceRequirements,
     });
-  }, [activeLineId, activeYear, activeMonth, roster, employees, workOrders, resourceRequirements]);
+    const forShift = (lineId: string, isoDate: string, shift: ShiftFamily) => {
+      const [y, m, d] = isoDate.split('-').map((n) => parseInt(n, 10));
+      // Everyone in the line's staff pool (Line 4 & 6 together)
+      return POOL_LINES[poolOfLineId(lineId)].ids.flatMap((id) =>
+        staffOnShift(getRoster(id, y, m), employeesByLine[id] ?? [], codesByLine[id], d, shift),
+      );
+    };
+    return { workload: result, staffForShift: forShift };
+  }, [workOrders, resourceRequirements, allEmployees, allRosters, leave, codesByLine, roster, activeLineId, activeYear, activeMonth]);
 
-  const uploadWorkOrders = useCallback(async (buffer: ArrayBuffer) => {
-    const { workOrders: parsed } = parseWorkOrdersWorkbook(buffer);
+  /**
+   * Planner issues = roster rules + Work Orders shortfalls for the open line &
+   * month, one per day + shift where the work orders need more people than the
+   * roster has on that shift. Fixing the roster removes them on the next render.
+   */
+  const issues = useMemo(() => {
+    // Line 4 & 6 share one team, so their shortfalls are checked together
+    const pool = poolOfLineId(activeLineId);
+    const poolCodes: string[] = POOL_LINES[pool].codes;
+    const teamNote = pool === 'L4_L6' ? ' (Line 4 & 6 team)' : '';
+    const monthPrefix = `${activeYear}-${String(activeMonth).padStart(2, '0')}-`;
+    const lineCodesList = codesByLine[activeLineId] ?? [];
+    const pickCode = (shift: ShiftFamily) =>
+      (codes.find((c) => c.id === shift) ??
+        codes.find((c) => codeFamily(c.id, lineCodesList) === shift) ??
+        lineCodesList.find((c) => c.id === shift))?.id ?? shift;
+
+    const woIssues: Issue[] = workload.balances
+      .filter((b) => b.pool === pool && b.date.startsWith(monthPrefix) && b.buffer < 0)
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map((b) => {
+        const day = parseInt(b.date.slice(8, 10), 10);
+        const label = SHIFT_LABEL[b.shift];
+        const ids = Object.values(workload.byWo)
+          .filter((a) => poolCodes.includes(a.lineCode) && a.date === b.date && a.shift === b.shift && a.status !== 'OK')
+          .map((a) => a.woId);
+        return {
+          id: `wo-${b.date}-${b.shift}`,
+          severity: 'error' as const,
+          rule: 'work-order-short' as const,
+          message: `Day ${day} · ${label}${teamNote}: work orders need ${b.demand}, only ${b.onDuty} on ${label} — short ${-b.buffer}.`,
+          dayIndex: day - 1,
+          shiftCode: pickCode(b.shift),
+          workOrderIds: ids,
+        };
+      });
+    // Rows whose imported data had to be guessed, grouped by kind of problem
+    const inSheet = workOrders.filter((wo) => {
+      const live = workload.byWo[wo.id];
+      return live && poolCodes.includes(live.lineCode) && live.date.startsWith(monthPrefix) && wo.importWarnings?.length;
+    });
+    const groups = new Map<string, { text: string; ids: string[]; days: Set<number> }>();
+    for (const wo of inSheet) {
+      for (const w of wo.importWarnings ?? []) {
+        // "Row 45: Scheduled Start missing" → "Scheduled Start missing"
+        const key = w.replace(/^Row \d+:\s*/, '').replace(/"[^"]*"/g, '…').replace(/Work Order \S+ appears/, 'Work order number appears');
+        const g = groups.get(key) ?? { text: key, ids: [], days: new Set<number>() };
+        g.ids.push(wo.id);
+        g.days.add(workload.byWo[wo.id].day);
+        groups.set(key, g);
+      }
+    }
+    const dataIssues: Issue[] = [...groups.values()].map((g, i) => ({
+      id: `wo-data-${i}-${g.text}`,
+      severity: 'warning' as const,
+      rule: 'work-order-data' as const,
+      message: `${g.ids.length} work order${g.ids.length === 1 ? '' : 's'} from the import: ${g.text}. Check the Excel file.`,
+      dayIndex: g.days.size === 1 ? [...g.days][0] - 1 : undefined,
+      workOrderIds: g.ids,
+    }));
+
+    // Shortfalls this sheet can't show (other lines / months)
+    const elsewhere = workload.conflicts.filter(
+      (c) => c.status !== 'NO_ROSTER' && !(poolCodes.includes(c.lineCode) && c.date.startsWith(monthPrefix)),
+    ).length;
+    const elsewhereIssue: Issue[] = elsewhere
+      ? [{
+          id: 'wo-elsewhere',
+          severity: 'warning' as const,
+          rule: 'work-order-short' as const,
+          message: `${elsewhere} more work order${elsewhere === 1 ? ' is' : 's are'} short on other lines or months — see Work Orders.`,
+        }]
+      : [];
+
+    // Rows the import couldn't put on any day (no Scheduled Start / Line)
+    const unplaced = Object.values(workload.byWo).filter((x) => x.status === 'UNPLACED').length;
+    const unplacedIssue: Issue[] = unplaced
+      ? [{
+          id: 'wo-unplaced',
+          severity: 'warning' as const,
+          rule: 'work-order-data' as const,
+          message: `${unplaced} imported work order${unplaced === 1 ? '' : 's'} could not be placed on a day (no valid Scheduled Start or Line) — see Work Orders → Import report.`,
+        }]
+      : [];
+
+    return [...woIssues, ...ruleIssues, ...dataIssues, ...unplacedIssue, ...elsewhereIssue];
+  }, [ruleIssues, workload, workOrders, activeLineId, activeYear, activeMonth, codes, codesByLine]);
+
+  const uploadWorkOrders = useCallback(async (buffer: ArrayBuffer, fileName = 'work orders.xlsx') => {
+    // Built-in yellow columns + any added in Setup → Excel import columns
+    const result = parseWorkOrdersWorkbook(buffer, allWorkOrderColumns((await getSettings()).customWorkOrderColumns));
     await db.transaction('rw', db.workOrders, async () => {
       await db.workOrders.clear();
-      await db.workOrders.bulkPut(parsed);
+      await db.workOrders.bulkPut(result.workOrders);
     });
-    return { count: parsed.length };
+    const report: WorkOrderImportReport = {
+      fileName,
+      at: Date.now(),
+      rows: result.totalRows,
+      headerRow: result.headerRow,
+      fileErrors: result.fileErrors,
+      problemRows: result.workOrders.filter((w) => w.importWarnings?.length).length,
+    };
+    await patchSettings({ lastWorkOrderImport: report });
+    return report;
   }, []);
-
-  const allocateResources = useCallback(async () => {
-    const outcome = allocateWorkOrdersToRoster({
-      lineId: activeLineId,
-      year: activeYear,
-      month: activeMonth,
-      roster,
-      employees,
-      workOrders,
-      requirements: resourceRequirements,
-    });
-
-    await db.transaction('rw', db.workOrders, db.allocations, async () => {
-      for (const wo of outcome.updatedWorkOrders) {
-        await db.workOrders.put(wo);
-      }
-      await db.allocations.clear();
-      await db.allocations.bulkPut(outcome.allocations);
-    });
-  }, [activeLineId, activeYear, activeMonth, roster, employees, workOrders, resourceRequirements]);
 
   const saveWorkOrder = useCallback(async (wo: WorkOrder) => {
     await db.workOrders.put(wo);
@@ -740,11 +869,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     workOrders,
     resourceRequirements,
-    allocations,
-    shiftBalances,
-    workloadConflicts,
+    workload,
+    staffForShift,
+    codesByLine,
     uploadWorkOrders,
-    allocateResources,
     saveWorkOrder,
     saveResourceRequirement,
     removeWorkOrder,

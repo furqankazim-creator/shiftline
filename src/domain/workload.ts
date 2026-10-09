@@ -1,13 +1,7 @@
 import * as XLSX from 'xlsx-js-style';
 
-import type {
-  AllocationRecord,
-  Employee,
-  ResourceRequirement,
-  RosterMonth,
-  ShiftWorkloadBalance,
-  WorkOrder,
-} from './types';
+import type { ResourceRequirement, WorkOrder } from './types';
+import { WORK_ORDER_COLUMNS, WORK_TYPE_RULES, headerKey, type WorkOrderColumn } from './workOrderColumns';
 
 /** Normalizes line name/token into standard 'L4' | 'L5' | 'L6' */
 export function normalizeLineCode(raw: string | undefined): 'L4' | 'L5' | 'L6' {
@@ -53,8 +47,9 @@ export function normalizeWorkType(raw: string | undefined): 'PM' | 'CM' | 'ACS' 
  *
  * All other columns (Description, Department, Work Type, Asset, Status) are optional display columns.
  */
-export function parseDateToIso(raw: any, fallbackYear = 2026, fallbackMonth = 11): string {
-  if (!raw) return `${fallbackYear}-${String(fallbackMonth).padStart(2, '0')}-01`;
+/** Reads a date from a cell, or null when it can't be read (so callers can flag it). */
+export function tryParseDate(raw: any): string | null {
+  if (!raw) return null;
 
   if (raw instanceof Date && !isNaN(raw.getTime())) {
     const y = raw.getFullYear();
@@ -64,7 +59,7 @@ export function parseDateToIso(raw: any, fallbackYear = 2026, fallbackMonth = 11
   }
 
   const str = String(raw).trim();
-  if (!str) return `${fallbackYear}-${String(fallbackMonth).padStart(2, '0')}-01`;
+  if (!str) return null;
 
   // ISO: YYYY-MM-DD
   const isoMatch = str.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
@@ -102,105 +97,169 @@ export function parseDateToIso(raw: any, fallbackYear = 2026, fallbackMonth = 11
     return `${y}-${m}-${d}`;
   }
 
-  return `${fallbackYear}-${String(fallbackMonth).padStart(2, '0')}-01`;
+  return null;
 }
 
-export function parseWorkOrdersWorkbook(buffer: ArrayBuffer): {
+export function parseDateToIso(raw: any, fallbackYear = 2026, fallbackMonth = 11): string {
+  return tryParseDate(raw) ?? `${fallbackYear}-${String(fallbackMonth).padStart(2, '0')}-01`;
+}
+
+/** Strict line reading for imports: "L4", "Line 5", "6" → L4/L5/L6, anything else → null. */
+export function parseLineCode(raw: unknown): 'L4' | 'L5' | 'L6' | null {
+  const m = String(raw ?? '').trim().match(/^(?:l|line)?\s*0?([456])$/i);
+  return m ? (`L${m[1]}` as 'L4' | 'L5' | 'L6') : null;
+}
+
+/** Work type from a "Work Type" column if one is configured, else from the description. */
+export function deriveWorkType(description: string, explicit?: string): 'PM' | 'CM' | 'ACS' {
+  if (explicit && explicit.trim()) return normalizeWorkType(explicit);
+  return WORK_TYPE_RULES.find((r) => r.pattern.test(description))?.type ?? 'PM';
+}
+
+export interface WorkOrderImportResult {
   workOrders: WorkOrder[];
+  /** Data rows read (blank rows skipped). */
   totalRows: number;
+  /** One line per problem, e.g. "Row 45: Scheduled Start missing". */
   warnings: string[];
-} {
+  /** Whole-file problems, e.g. a configured column not found. */
+  fileErrors: string[];
+  /** Excel row number of the header row (1-based). */
+  headerRow: number;
+}
+
+/** Fields a configured column may fill directly on a WorkOrder; anything else goes to `extra`. */
+const KNOWN_FIELDS = new Set([
+  'workOrderId', 'description', 'location', 'reportedDate', 'startNoEarlier', 'targetStart',
+  'scheduledStart', 'finishNoLater', 'department', 'line', 'assetGroup', 'workType', 'status',
+]);
+
+/**
+ * Reads the work-order sheet using WORK_ORDER_COLUMNS (see workOrderColumns.ts):
+ * only those columns, matched by header name; every problem is reported, never
+ * silently replaced with a made-up value.
+ */
+export function parseWorkOrdersWorkbook(
+  buffer: ArrayBuffer,
+  columns: WorkOrderColumn[] = WORK_ORDER_COLUMNS,
+): WorkOrderImportResult {
   const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
   const sheetName = wb.SheetNames[0];
-  if (!sheetName) throw new Error('Excel workbook contains no sheets.');
+  if (!sheetName) throw new Error('The Excel file contains no sheets.');
+  const grid: unknown[][] = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {
+    header: 1, raw: true, defval: '', blankrows: true,
+  });
 
-  const sheet = wb.Sheets[sheetName];
-  const rows: Record<string, any>[] = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
+  // Header row = the row (within the first 20) that matches the most configured headers
+  const keysFor = (c: WorkOrderColumn) => [c.excelHeader, ...(c.aliases ?? [])].map(headerKey);
+  let headerIdx = -1;
+  let bestHits = 0;
+  grid.slice(0, 20).forEach((row, i) => {
+    const cells = new Set(row.map(headerKey));
+    const hits = columns.filter((c) => keysFor(c).some((k) => cells.has(k))).length;
+    if (hits > bestHits) { bestHits = hits; headerIdx = i; }
+  });
+  if (headerIdx < 0 || bestHits < 2) {
+    throw new Error(
+      `No work-order header row found. Expected columns such as ${columns.slice(0, 4).map((c) => `"${c.excelHeader}"`).join(', ')}.`,
+    );
+  }
+
+  const header = grid[headerIdx].map(headerKey);
+  const colIndex = new Map<WorkOrderColumn, number>();
+  const fileErrors: string[] = [];
+  for (const c of columns) {
+    const idx = header.findIndex((h) => h && keysFor(c).includes(h));
+    if (idx >= 0) colIndex.set(c, idx);
+    else if (c.required) fileErrors.push(`Column "${c.excelHeader}" not found in the file`);
+  }
 
   const workOrders: WorkOrder[] = [];
   const warnings: string[] = [];
+  const rowOf = new Map<WorkOrder, number>();
 
-  rows.forEach((row, idx) => {
-    // Locate columns with flexible key matching (prioritizing yellow highlighted columns)
-    const findVal = (patterns: string[]): string => {
-      for (const [k, v] of Object.entries(row)) {
-        const keyClean = k.trim().toLowerCase();
-        if (patterns.some((p) => keyClean.includes(p.toLowerCase()))) {
-          return String(v).trim();
-        }
-      }
-      return '';
+  grid.slice(headerIdx + 1).forEach((row, i) => {
+    const excelRow = headerIdx + i + 2;
+    const raw = (c: WorkOrderColumn) => {
+      const idx = colIndex.get(c);
+      return idx === undefined ? '' : row[idx];
     };
+    if ([...colIndex.values()].every((idx) => String(row[idx] ?? '').trim() === '')) return; // blank row
 
-    // 1. Mandatory Yellow: Work Order ID
-    const rawWoId =
-      findVal(['work order', 'wo number', 'order id', 'wo', 'id']) || `WO-${13400000 + idx}`;
-
-    // 2. Mandatory Yellow: Line / Location
-    const rawLine = findVal(['line', 'location', 'prod line', 'production line', 'asset']) || 'L5';
-
-    // 3. Mandatory Yellow: Scheduled Start Date (Col J: Start No Earlier, Col N: Scheduled Start)
-    const rawStart =
-      findVal([
-        'start no earlier',
-        'scheduled start',
-        'earlier due start',
-        'finish earlier',
-        'sched start',
-        'target start',
-        'start date',
-      ]) || '2026-11-01';
-
-    // 4. Mandatory Yellow: Scheduled Finish Date (Col O: Finish No Later, Col Q: Scheduled Finish)
-    const rawFinish =
-      findVal([
-        'finish no later',
-        'finish note later date',
-        'scheduled finish',
-        'finish later',
-        'sched finish',
-        'target finish',
-        'finish date',
-      ]) || '2026-11-15';
-
-    // 5. Mandatory Yellow / Fallback: Resource Required
-    const rawCrew = findVal(['resource required', 'resource', 'people', 'manpower', 'crew']);
-
-    // Optional Display Columns
-    const rawType = findVal(['work type', 'type', 'activity type']) || 'PM';
-    const rawDept = findVal(['department', 'dept', 'section']) || 'SLV';
-    const rawDesc = findVal(['description', 'task', 'desc', 'activity']) || `Work Order ${rawWoId}`;
-    const rawStatus = findVal(['status', 'state']) || 'APPR';
-
-    const line = normalizeLineCode(rawLine);
-    const workType = normalizeWorkType(rawType);
-
-    // Default crew size based on work type: PM=2, CM=2, ACS=1 (or parsed crew if specified)
-    let resourceRequired = workType === 'PM' ? 2 : workType === 'CM' ? 2 : 1;
-    if (rawCrew && !isNaN(parseInt(rawCrew, 10))) {
-      resourceRequired = Math.max(1, parseInt(rawCrew, 10));
+    const problems: string[] = [];
+    const values: Record<string, string> = {};
+    for (const c of columns) {
+      if (!colIndex.has(c)) continue; // already reported for the whole file
+      const v = raw(c);
+      const text = v instanceof Date ? '' : String(v ?? '').trim();
+      if (!(v instanceof Date) && text === '') {
+        if (c.required) problems.push(`Row ${excelRow}: ${c.excelHeader} missing`);
+        values[c.appField] = '';
+        continue;
+      }
+      if (c.type === 'date') {
+        const iso = tryParseDate(v);
+        if (!iso) problems.push(`Row ${excelRow}: ${c.excelHeader} "${text}" is not a date`);
+        values[c.appField] = iso ?? '';
+      } else if (c.type === 'line') {
+        const line = parseLineCode(text);
+        if (!line) problems.push(`Row ${excelRow}: ${c.excelHeader} "${text}" is not L4, L5 or L6`);
+        values[c.appField] = line ?? '';
+      } else if (c.type === 'number') {
+        if (isNaN(Number(text))) problems.push(`Row ${excelRow}: ${c.excelHeader} "${text}" is not a number`);
+        values[c.appField] = text;
+      } else {
+        values[c.appField] = text;
+      }
     }
 
-    const scheduledStart = parseDateToIso(rawStart, 2026, 11);
-    const scheduledFinish = parseDateToIso(rawFinish, 2026, 11);
+    const extra: Record<string, string> = {};
+    for (const [k, v] of Object.entries(values)) if (!KNOWN_FIELDS.has(k)) extra[k] = v;
 
-    workOrders.push({
-      id: `wo-${rawWoId.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${idx}`,
-      workOrderId: rawWoId,
-      description: rawDesc,
-      workType,
-      line,
-      department: rawDept,
-      scheduledStart,
-      scheduledFinish,
-      targetFinish: scheduledFinish,
-      status: rawStatus,
-      resourceRequired,
-      allocationStatus: 'UNASSIGNED',
-    });
+    const workOrderId = values.workOrderId || `ROW-${excelRow}`;
+    const description = values.description || '';
+    const wo: WorkOrder = {
+      id: `wo-${workOrderId.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${excelRow}`,
+      workOrderId,
+      description,
+      workType: deriveWorkType(description, values.workType),
+      line: values.line ?? '',
+      department: values.department || undefined,
+      location: values.location || undefined,
+      assetGroup: values.assetGroup || undefined,
+      reportedDate: values.reportedDate || undefined,
+      startNoEarlier: values.startNoEarlier || undefined,
+      targetStart: values.targetStart || undefined,
+      scheduledStart: values.scheduledStart ?? '',
+      finishNoLater: values.finishNoLater || undefined,
+      scheduledFinish: values.finishNoLater || values.scheduledStart || '',
+      targetFinish: values.finishNoLater || undefined,
+      status: values.status || '',
+      // Crew size is not a yellow column: it comes from Setup → Resource Standards
+      resourceRequired: 0,
+      crewSource: 'standard',
+      extra: Object.keys(extra).length ? extra : undefined,
+      importWarnings: problems.length ? problems : undefined,
+    };
+    workOrders.push(wo);
+    rowOf.set(wo, excelRow);
   });
 
-  return { workOrders, totalRows: rows.length, warnings };
+  // The same work order number twice is usually a copy-paste slip in the sheet
+  const count = new Map<string, number>();
+  for (const wo of workOrders) count.set(wo.workOrderId, (count.get(wo.workOrderId) ?? 0) + 1);
+  for (const wo of workOrders) {
+    const n = count.get(wo.workOrderId) ?? 1;
+    if (n > 1 && !wo.workOrderId.startsWith('ROW-')) {
+      wo.importWarnings = [
+        ...(wo.importWarnings ?? []),
+        `Row ${rowOf.get(wo)}: Work Order ${wo.workOrderId} appears ${n} times in the file`,
+      ];
+    }
+  }
+  for (const wo of workOrders) warnings.push(...(wo.importWarnings ?? []));
+
+  return { workOrders, totalRows: workOrders.length, warnings, fileErrors, headerRow: headerIdx + 1 };
 }
 
 /**
@@ -212,7 +271,8 @@ export function getRequiredCrewCount(
   workType: string,
   shift: 'morning' | 'evening' | 'night',
 ): number {
-  const normLine = normalizeLineCode(line);
+  // Line 4 & 6 are one team with one set of standards, kept under L4
+  const normLine = normalizeLineCode(line) === 'L6' ? 'L4' : normalizeLineCode(line);
   const normType = normalizeWorkType(workType);
 
   const matched = requirements.find(
@@ -228,222 +288,3 @@ export function getRequiredCrewCount(
   if (normType === 'CM') return 2;
   return 1;
 }
-
-export interface AllocationEngineInput {
-  lineId: string;
-  year: number;
-  month: number;
-  roster: RosterMonth | null;
-  employees: Employee[];
-  workOrders: WorkOrder[];
-  requirements: ResourceRequirement[];
-}
-
-export interface AllocationEngineOutput {
-  updatedWorkOrders: WorkOrder[];
-  allocations: AllocationRecord[];
-  shiftBalances: ShiftWorkloadBalance[];
-  conflicts: {
-    woId: string;
-    description: string;
-    line: string;
-    date: string;
-    shift: string;
-    needed: number;
-    available: number;
-    shortage: number;
-    reason: string;
-  }[];
-  totalWorkOrders: number;
-  allocatedCount: number;
-  shortCount: number;
-}
-
-/**
- * Core Algorithm: Matches work orders to available roster slots,
- * marks individual working engineers by name as allocated,
- * and calculates live net buffer and conflict alerts.
- */
-export function allocateWorkOrdersToRoster(input: AllocationEngineInput): AllocationEngineOutput {
-  const { lineId, year, month, roster, employees, workOrders, requirements } = input;
-  const targetLineCode = lineIdToCode(lineId);
-
-  // Filter work orders for this line
-  const lineWorkOrders = workOrders.filter((wo) => normalizeLineCode(wo.line) === targetLineCode);
-
-  const allocations: AllocationRecord[] = [];
-  const conflicts: AllocationEngineOutput['conflicts'] = [];
-
-  // Track daily employee assignment to prevent double-booking:
-  // key: `${empId}::${dayIndex}::${shiftCode}` -> workOrderId
-  const busyEmployees = new Map<string, string>();
-
-  // Helper to find working engineers on a given day and shift
-  const getWorkingStaff = (dayNum: number, shiftCode: 'M' | 'E' | 'N'): Employee[] => {
-    if (!roster) return [];
-    const dayIdx = dayNum - 1;
-    const working: Employee[] = [];
-
-    for (const emp of employees) {
-      if (emp.active === false) continue;
-      const cell = roster.cells[emp.id]?.[dayIdx];
-      if (cell && cell.code === shiftCode) {
-        working.push(emp);
-      }
-    }
-    return working;
-  };
-
-  const updatedWorkOrders: WorkOrder[] = lineWorkOrders.map((wo) => {
-    // Determine target day and shift
-    const startParts = wo.scheduledStart.split('-');
-    let targetDay = 1;
-    if (startParts.length === 3) {
-      const d = parseInt(startParts[2], 10);
-      if (!isNaN(d) && d >= 1 && d <= 31) targetDay = d;
-    }
-
-    // Default shift preference: PM typically Morning or Night; CM on Evening/Morning
-    let targetShift: 'M' | 'E' | 'N' = 'M';
-    if (wo.plannedShift) {
-      targetShift = wo.plannedShift;
-    } else if (wo.workType === 'PM' && wo.resourceRequired >= 4) {
-      targetShift = 'N'; // Heavy PM assigned to night
-    } else if (wo.workType === 'CM') {
-      targetShift = 'E';
-    }
-
-    const shiftName = targetShift === 'M' ? 'morning' : targetShift === 'E' ? 'evening' : 'night';
-    const needed = wo.resourceRequired || getRequiredCrewCount(requirements, wo.line, wo.workType, shiftName);
-
-    // Candidates working on that line, day, and shift
-    const workingOnShift = getWorkingStaff(targetDay, targetShift);
-    const availableStaff = workingOnShift.filter(
-      (e) => !busyEmployees.has(`${e.id}::${targetDay}::${targetShift}`),
-    );
-
-    if (availableStaff.length >= needed) {
-      const assigned = availableStaff.slice(0, needed);
-      const assignedIds = assigned.map((e) => e.id);
-      const assignedNames = assigned.map((e) => e.name);
-
-      assigned.forEach((e) => {
-        busyEmployees.set(`${e.id}::${targetDay}::${targetShift}`, wo.id);
-        allocations.push({
-          id: `alloc-${wo.id}-${e.id}`,
-          workOrderId: wo.id,
-          personId: e.id,
-          personName: e.name,
-          allocatedDate: `${year}-${String(month).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`,
-          shift: targetShift,
-          allocatedBy: 'supervisor',
-          allocationStatus: 'confirmed',
-        });
-      });
-
-      return {
-        ...wo,
-        plannedDay: targetDay,
-        plannedShift: targetShift,
-        resourceRequired: needed,
-        assignedEmployeeIds: assignedIds,
-        assignedEmployeeNames: assignedNames,
-        allocationStatus: 'OK',
-        conflictReason: undefined,
-      };
-    } else {
-      const shortage = needed - availableStaff.length;
-      const assignedIds = availableStaff.map((e) => e.id);
-      const assignedNames = availableStaff.map((e) => e.name);
-
-      availableStaff.forEach((e) => {
-        busyEmployees.set(`${e.id}::${targetDay}::${targetShift}`, wo.id);
-      });
-
-      const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
-      conflicts.push({
-        woId: wo.workOrderId,
-        description: wo.description,
-        line: targetLineCode,
-        date: dateStr,
-        shift: targetShift === 'M' ? 'Morning' : targetShift === 'E' ? 'Evening' : 'Night',
-        needed,
-        available: availableStaff.length,
-        shortage,
-        reason: `${targetLineCode} ${targetShift === 'M' ? 'Morning' : targetShift === 'E' ? 'Evening' : 'Night'} short by ${shortage} person(s)`,
-      });
-
-      return {
-        ...wo,
-        plannedDay: targetDay,
-        plannedShift: targetShift,
-        resourceRequired: needed,
-        assignedEmployeeIds: assignedIds,
-        assignedEmployeeNames: assignedNames,
-        allocationStatus: 'SHORT',
-        conflictReason: `Need ${needed}, only ${availableStaff.length} available (short ${shortage})`,
-      };
-    }
-  });
-
-  // Calculate Shift Balance KPI Summary (e.g. Morning: 5 Available | 2 PM + 2 CM = 4 | Buffer: +1)
-  const shiftBalances: ShiftWorkloadBalance[] = (['M', 'E', 'N'] as const).map((sCode) => {
-    const shiftLabel = sCode === 'M' ? 'Morning' : sCode === 'E' ? 'Evening' : 'Night';
-
-    // Average or sample working headcount on this shift
-    let totalWorking = 0;
-    if (roster) {
-      for (let d = 1; d <= 28; d++) {
-        totalWorking += getWorkingStaff(d, sCode).length;
-      }
-    }
-    const avgStaff = Math.max(1, Math.round(totalWorking / 28)) || (sCode === 'N' ? 4 : 5);
-
-    // Sum demands for this shift
-    let pmCount = 0;
-    let cmCount = 0;
-    let acsCount = 0;
-
-    updatedWorkOrders.forEach((wo) => {
-      if (wo.plannedShift === sCode) {
-        if (wo.workType === 'PM') pmCount += wo.resourceRequired;
-        else if (wo.workType === 'CM') cmCount += wo.resourceRequired;
-        else acsCount += wo.resourceRequired;
-      }
-    });
-
-    // Average daily demand
-    const dailyPm = Math.min(avgStaff, Math.max(1, Math.round(pmCount / 10)));
-    const dailyCm = Math.min(avgStaff - dailyPm, Math.max(1, Math.round(cmCount / 10))) || 1;
-    const dailyAcs = Math.round(acsCount / 15);
-    const totalAllocated = dailyPm + dailyCm + dailyAcs;
-    const buffer = avgStaff - totalAllocated;
-
-    return {
-      line: targetLineCode,
-      shift: sCode,
-      shiftLabel,
-      availableStaff: avgStaff,
-      pmRequired: dailyPm,
-      cmReserve: dailyCm,
-      acsRequired: dailyAcs,
-      totalAllocated,
-      buffer,
-      status: buffer < 0 ? 'short' : buffer === 0 ? 'tight' : 'ok',
-    };
-  });
-
-  const allocatedCount = updatedWorkOrders.filter((wo) => wo.allocationStatus === 'OK').length;
-  const shortCount = updatedWorkOrders.filter((wo) => wo.allocationStatus === 'SHORT').length;
-
-  return {
-    updatedWorkOrders,
-    allocations,
-    shiftBalances,
-    conflicts,
-    totalWorkOrders: lineWorkOrders.length,
-    allocatedCount,
-    shortCount,
-  };
-}
-

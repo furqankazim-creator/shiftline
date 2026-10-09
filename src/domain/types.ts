@@ -184,6 +184,8 @@ export interface Issue {
   /** 0-based day index within the month. */
   dayIndex?: number;
   shiftCode?: string;
+  /** For 'work-order-short': the work orders (ids) that are not fully staffed. */
+  workOrderIds?: string[];
 }
 
 export type IssueRule =
@@ -192,7 +194,11 @@ export type IssueRule =
   | 'night-to-morning'
   | 'too-many-consecutive'
   | 'rest-days-violated'
-  | 'working-while-on-leave';
+  | 'working-while-on-leave'
+  /** Work orders that day + shift need more people than the roster has on it. */
+  | 'work-order-short'
+  /** Work order rows whose imported data had to be guessed (no date, unknown line …). */
+  | 'work-order-data';
 
 /** Per-day headcount totals — the client's sheet rows 27–32. */
 export interface DaySummary {
@@ -213,9 +219,25 @@ export interface WorkOrder {
   description: string;
   workType: WorkType; // "PM" | "CM" | "ACS"
   line: string; // "L4" | "L5" | "L6"
-  department?: string; // "SLV" | "DCS" | "SIG"
-  scheduledStart: string; // ISO date / string
-  scheduledFinish: string; // ISO date / string
+  department?: string; // "Div / Depart": SLV, TSM …
+  /** Day the work is placed on the Planner and counted in shift demand (ISO). */
+  scheduledStart: string;
+  /** Kept for older records; imports set it to Finish No Later Than. */
+  scheduledFinish: string;
+  /** Asset / location code. */
+  location?: string;
+  /** Date the work order was raised (reference: ageing). */
+  reportedDate?: string;
+  /** Allowed window start (ISO). */
+  startNoEarlier?: string;
+  /** Planned target start (reference: target vs scheduled). */
+  targetStart?: string;
+  /** Allowed window end (ISO) — "past Finish No Later Than" / "outside window". */
+  finishNoLater?: string;
+  /** DCS, SIG, ISM, CCT, PAS … */
+  assetGroup?: string;
+  /** Values of extra columns added to WORK_ORDER_COLUMNS that the app has no field for. */
+  extra?: Record<string, string>;
   targetFinish?: string;
   status: 'APPR' | 'INPRG' | 'COMPLETED' | string;
   resourceRequired: number; // e.g. 2 for PM, 1 for CM
@@ -223,6 +245,25 @@ export interface WorkOrder {
   // Active assignment state
   plannedDay?: number; // 1..31
   plannedShift?: 'M' | 'E' | 'N';
+  /**
+   * 'manual' = the crew in assignedEmployeeIds was picked by hand and is kept
+   * while those people are still on that shift. Otherwise the crew is worked
+   * out live from the roster (see domain/workloadLive.ts) and the stored
+   * assignment fields below are ignored.
+   */
+  crewMode?: 'auto' | 'manual';
+  /**
+   * Where the crew size (resourceRequired) comes from:
+   * 'file'     — the Excel row gave a number
+   * 'standard' — the row gave none: use Setup → Work Order Resource Standards
+   *              for this line + work type + shift (resourceRequired is ignored)
+   * 'manual'   — changed by hand in Work Orders
+   * Older records without this field are treated as 'standard' when they hold
+   * the old built-in default (PM 2, CM 2, ACS 1), otherwise as 'file'.
+   */
+  crewSource?: 'file' | 'standard' | 'manual';
+  /** Problems found in this row when the Excel file was imported (missing/unreadable values). */
+  importWarnings?: string[];
   assignedEmployeeIds?: string[];
   assignedEmployeeNames?: string[];
   allocationStatus?: 'OK' | 'SHORT' | 'CONFLICT' | 'UNASSIGNED';

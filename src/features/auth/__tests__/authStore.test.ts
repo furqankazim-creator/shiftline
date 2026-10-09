@@ -1,25 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { LoginNotification, SecuritySettings, UserSession } from '../types';
+import { matchPasscode } from '../types';
+import type { LoginNotification, UserSession } from '../types';
 
 describe('Auth & Protected Access Logic', () => {
-  const defaultSettings: SecuritySettings = {
-    sharedPasscode: 'shiftline2026',
-    adminPassword: 'supervisor1',
-    requireName: true,
-    notifyOnLogin: true,
-    soundAlert: true,
-    defaultSharedRole: 'collaborator',
-  };
-
-  it('validates correct shared passcode and rejects incorrect passcode', () => {
-    const inputPasscode = 'shiftline2026';
-    const wrongPasscode = 'invalid123';
-
-    expect(inputPasscode.trim() === defaultSettings.sharedPasscode).toBe(true);
-    expect(wrongPasscode.trim() === defaultSettings.sharedPasscode).toBe(false);
-  });
-
   it('creates valid user session on successful login with name and device info', () => {
     const userName = 'Hasnain';
     const passcode = 'shiftline2026';
@@ -67,31 +51,24 @@ describe('Auth & Protected Access Logic', () => {
     expect(unread).toBe(2);
   });
 
-  it('validates dynamic generated passcodes like shift-8255 and handles case-insensitivity', () => {
-    const updatedSettings: SecuritySettings = {
-      ...defaultSettings,
-      sharedPasscode: 'shift-8255',
-      recentPasscodes: ['shift-8255', 'shiftline2026'],
+  describe('matchPasscode (only assigned passcodes unlock)', () => {
+    const settings = {
+      assignedPasscodes: [
+        { id: 'a1', assignedTo: 'Arif', passcode: 'shift-arif-44', role: 'collaborator' as const, createdAt: 0, status: 'active' as const },
+        { id: 'a2', assignedTo: 'Latif', passcode: 'shift-latif-71', role: 'viewer' as const, createdAt: 0, status: 'revoked' as const },
+      ],
     };
 
-    const inputLower = 'shift-8255';
-    const inputUpper = 'SHIFT-8255';
-    const defaultFallback = 'shiftline2026';
-    const wrongCode = 'wrong-0000';
+    it('accepts an active personal passcode (case-insensitive) and returns the person', () => {
+      expect(matchPasscode(settings, ' SHIFT-ARIF-44 ')?.assignedTo).toBe('Arif');
+    });
 
-    const isValid = (code: string) => {
-      const c = code.trim().toLowerCase();
-      return (
-        c === updatedSettings.sharedPasscode.toLowerCase() ||
-        c === defaultSettings.sharedPasscode.toLowerCase() ||
-        (updatedSettings.recentPasscodes || []).map((p) => p.toLowerCase()).includes(c)
-      );
-    };
-
-    expect(isValid(inputLower)).toBe(true);
-    expect(isValid(inputUpper)).toBe(true);
-    expect(isValid(defaultFallback)).toBe(true);
-    expect(isValid(wrongCode)).toBe(false);
+    it('rejects revoked, unknown, old default and blank passcodes', () => {
+      expect(matchPasscode(settings, 'shift-latif-71')).toBeNull();
+      expect(matchPasscode(settings, 'wrong-0000')).toBeNull();
+      expect(matchPasscode(settings, 'shiftline2026')).toBeNull();
+      expect(matchPasscode(settings, '   ')).toBeNull();
+    });
   });
 
   it('creates formatted logout notification when collaborator logs out', () => {

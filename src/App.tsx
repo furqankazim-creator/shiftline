@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 
 import { StoreProvider, useStore } from '@/app/store';
 import { switchTheme } from '@/app/themeTransition';
+import { AlstomLogo } from '@/components/AlstomLogo';
 import { Button, ToastHost, cx } from '@/components/ui';
 import { monthLabel } from '@/domain/calendar';
 import { AuthProvider, useAuth } from '@/features/auth/authStore';
@@ -81,7 +82,7 @@ function Shell({ onHome }: { onHome: () => void }) {
     return (
       <div className="h-full grid place-items-center">
         <div className="flex flex-col items-center gap-3">
-          <Logo size={48} />
+          <AlstomLogo height={26} />
           <Wordmark className="text-[18px]" />
           <span className="text-[12px] text-ink-3">Loading roster…</span>
         </div>
@@ -94,139 +95,189 @@ function Shell({ onHome }: { onHome: () => void }) {
   return (
     <div className="flex h-full flex-col">
       <header
-        className="no-print relative mx-3 sm:mx-6 my-3 flex shrink-0 items-center justify-between gap-4 rounded-2xl border border-[var(--line-strong)] bg-[var(--surface)] px-5 sm:px-7 h-16 z-50 shadow-sm"
+        className="no-print relative mx-2 sm:mx-4 xl:mx-6 my-2 sm:my-3 shrink-0 rounded-2xl border border-[var(--line-strong)] bg-[var(--surface)] px-3 sm:px-5 xl:px-7 z-50 shadow-sm"
         style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
       >
-        <div className="flex items-center gap-3 sm:gap-6">
-          <button
-            type="button"
-            onClick={onHome}
-            title="Back to home"
-            aria-label="Back to home page"
-            className="flex items-center gap-3 text-left group py-0.5"
-          >
-            <Logo size={36} />
-            <div className="hidden sm:flex flex-col leading-tight">
-              <Wordmark className="text-[17.5px] font-black group-hover:text-[var(--accent)] transition-colors" />
-              <span className="text-[12px] font-bold text-ink-3">
-                {line?.name} <span className="text-ink-3">·</span> {monthLabel(settings.activeYear, settings.activeMonth)}
-              </span>
-            </div>
-          </button>
-
-          <span className="hidden sm:block h-7 w-px bg-[var(--line)]" aria-hidden />
-
-          {/* Segmented Pill Navigation */}
-          <nav className="flex items-center gap-1.5 bg-[var(--surface-2)] p-1.5 rounded-xl border border-[var(--line)] shadow-xs" aria-label="Main">
-            {([
-              ['planner', 'Planner', <GridIcon key="i" />],
-              ['workorders', 'Work Orders', <ClipboardIcon key="i" />],
-              ['people', 'People', <PeopleIcon key="i" />],
-              ['setup', 'Setup', <GearIcon key="i" />],
-            ] as const).map(([key, label, icon]) => {
-              const active = page === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => setPage(key)}
-                  aria-current={active ? 'page' : undefined}
-                  className={cx(
-                    'flex items-center gap-2 px-3.5 sm:px-4 py-1.5 rounded-lg text-[13px] sm:text-[13.5px] font-bold transition-all whitespace-nowrap',
-                    active
-                      ? 'bg-[var(--surface)] text-ink shadow-sm border border-[var(--line-strong)]'
-                      : 'text-ink-3 hover:text-ink hover:bg-[var(--surface-3)]/60',
-                  )}
-                >
-                  <span className={cx('transition-colors', active ? 'text-[var(--accent)]' : 'text-ink-3')}>
-                    {icon}
-                  </span>
-                  <span>{label}</span>
-                </button>
-              );
-            })}
-          </nav>
-        </div>
-
-        <div className="flex items-center gap-2.5 sm:gap-3">
-          <LivePresence />
-
-          {/* Notifications: Supervisor Only */}
-          {session?.role === 'supervisor' && <NotificationBell />}
-
-          {/* Share Link: Supervisor Only */}
-          {session?.role === 'supervisor' && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setShareOpen(true)}
-              className="flex items-center gap-1.5 text-xs font-bold h-9 px-3.5 text-ink rounded-xl border-[var(--line-strong)] hover:border-[var(--line)] shadow-xs"
-              title="Share Password-Protected Link & Security"
-            >
-              <span>🔗</span>
-              <span className="hidden md:inline">Share Link</span>
-            </Button>
-          )}
-
-          {/* User badge & Lock button */}
-          <div className="flex items-center gap-2.5 pl-2.5 border-l border-[var(--line)]">
-            <div
-              className="hidden xl:flex flex-col text-right leading-tight max-w-[130px]"
-              title={`Signed in as ${session?.name ?? 'User'} (${session?.role ?? 'viewer'})`}
-            >
-              <span className="truncate text-[12px] font-bold text-ink">
-                {session?.name ? session.name.replace(/ \/ Operations Lead/g, '') : 'Supervisor'}
-              </span>
-              <span className="text-[10px] font-black uppercase tracking-wider text-[var(--accent)]">
-                {session?.role === 'supervisor' ? 'Supervisor' : 'Collaborator'}
-              </span>
-            </div>
+        {/* Row 1: brand · (desktop: tabs) · actions */}
+        <div className="flex h-14 xl:h-16 items-center justify-between gap-2 sm:gap-4">
+          <div className="flex min-w-0 items-center gap-3 xl:gap-6">
             <button
               type="button"
-              onClick={logout}
-              title="Lock Screen / Sign Out"
-              aria-label="Lock Screen / Sign Out"
-              className="grid h-9 w-9 place-items-center rounded-xl border border-[var(--line-strong)] bg-[var(--surface-2)] text-ink-2 hover:text-amber-400 hover:bg-[var(--surface-3)] transition-all shadow-xs"
+              onClick={onHome}
+              title="Back to home"
+              aria-label="Back to home page"
+              className="flex min-w-0 items-center gap-2 sm:gap-3 text-left group py-0.5"
             >
-              <span className="text-[13px]" role="img" aria-label="Lock">
-                🔒
+              <span className="sm:hidden">
+                <AlstomLogo height={12} className="group-hover:opacity-85 transition-opacity" />
               </span>
+              <span className="hidden sm:inline-flex">
+                <AlstomLogo height={15} className="group-hover:opacity-85 transition-opacity" />
+              </span>
+              <span className="h-6 sm:h-8 w-px shrink-0 bg-[var(--line)]" aria-hidden />
+              <div className="flex min-w-0 flex-col leading-tight">
+                <Wordmark className="text-[15px] sm:text-[17.5px] font-black group-hover:text-[var(--accent)] transition-colors" />
+                <span className="hidden md:block truncate text-[12px] font-bold text-ink-3">
+                  {line?.name} <span className="text-ink-3">·</span> {monthLabel(settings.activeYear, settings.activeMonth)}
+                </span>
+              </div>
             </button>
+
+            {/* Desktop: tabs inline */}
+            <span className="hidden xl:block h-7 w-px bg-[var(--line)]" aria-hidden />
+            <MainNav page={page} setPage={setPage} className="hidden xl:flex" />
           </div>
 
-          <button
-            onClick={(e) => {
-              const next = settings.theme === 'dark' ? 'light' : 'dark';
-              // Paint the new theme now, animated, then save it.
-              switchTheme(next, e.currentTarget);
-              setTheme(next);
-            }}
-            title={settings.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            aria-label={settings.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            className="grid h-9 w-9 place-items-center overflow-hidden rounded-xl border border-[var(--line-strong)] bg-[var(--surface-2)] text-ink-2 hover:text-ink hover:bg-[var(--surface-3)] transition-all shadow-xs"
-          >
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.span
-                key={settings.theme}
-                initial={{ rotate: -90, scale: 0.4, opacity: 0 }}
-                animate={{ rotate: 0, scale: 1, opacity: 1 }}
-                exit={{ rotate: 90, scale: 0.4, opacity: 0 }}
-                transition={{ duration: 0.2, ease: 'easeOut' }}
-                className="grid place-items-center"
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2.5 xl:gap-3">
+            <span className="hidden sm:contents">
+              <LivePresence />
+            </span>
+
+            {/* Notifications: Supervisor Only */}
+            {session?.role === 'supervisor' && <NotificationBell />}
+
+            {/* Share Link: Supervisor Only */}
+            {session?.role === 'supervisor' && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setShareOpen(true)}
+                className="flex items-center gap-1.5 text-xs font-bold h-8 sm:h-9 px-2 sm:px-3.5 text-ink rounded-xl border-[var(--line-strong)] hover:border-[var(--line)] shadow-xs"
+                title="Share Password-Protected Link & Security"
+                aria-label="Share link"
               >
-                {settings.theme === 'dark' ? <SunIcon /> : <MoonIcon />}
-              </motion.span>
-            </AnimatePresence>
-          </button>
+                <span>🔗</span>
+                <span className="hidden lg:inline">Share Link</span>
+              </Button>
+            )}
+
+            {/* User badge & Lock button */}
+            <div className="flex items-center gap-2.5 sm:pl-2.5 sm:border-l border-[var(--line)]">
+              <div
+                className="hidden 2xl:flex flex-col text-right leading-tight max-w-[130px]"
+                title={`Signed in as ${session?.name ?? 'User'} (${session?.role ?? 'viewer'})`}
+              >
+                <span className="truncate text-[12px] font-bold text-ink">
+                  {session?.name ? session.name.replace(/ \/ Operations Lead/g, '') : 'Supervisor'}
+                </span>
+                <span className="text-[10px] font-black uppercase tracking-wider text-[var(--accent)]">
+                  {session?.role === 'supervisor' ? 'Supervisor' : 'Collaborator'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={logout}
+                title={`Signed in as ${session?.name ?? 'User'} — Lock Screen / Sign Out`}
+                aria-label="Lock Screen / Sign Out"
+                className="grid h-8 w-8 sm:h-9 sm:w-9 place-items-center rounded-xl border border-[var(--line-strong)] bg-[var(--surface-2)] text-ink-2 hover:text-amber-400 hover:bg-[var(--surface-3)] transition-all shadow-xs"
+              >
+                <span className="text-[13px]" role="img" aria-label="Lock">
+                  🔒
+                </span>
+              </button>
+            </div>
+
+            <button
+              onClick={(e) => {
+                const next = settings.theme === 'dark' ? 'light' : 'dark';
+                // Paint the new theme now, animated, then save it.
+                switchTheme(next, e.currentTarget);
+                setTheme(next);
+              }}
+              title={settings.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              aria-label={settings.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              className="grid h-8 w-8 sm:h-9 sm:w-9 place-items-center overflow-hidden rounded-xl border border-[var(--line-strong)] bg-[var(--surface-2)] text-ink-2 hover:text-ink hover:bg-[var(--surface-3)] transition-all shadow-xs"
+            >
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span
+                  key={settings.theme}
+                  initial={{ rotate: -90, scale: 0.4, opacity: 0 }}
+                  animate={{ rotate: 0, scale: 1, opacity: 1 }}
+                  exit={{ rotate: 90, scale: 0.4, opacity: 0 }}
+                  transition={{ duration: 0.2, ease: 'easeOut' }}
+                  className="grid place-items-center"
+                >
+                  {settings.theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+                </motion.span>
+              </AnimatePresence>
+            </button>
+          </div>
         </div>
+
+        {/* Row 2 (below desktop): tabs across the full width */}
+        <MainNav page={page} setPage={setPage} className="flex xl:hidden mb-2.5" fill />
       </header>
 
       {page === 'planner' && <PlannerPage />}
-      {page === 'workorders' && <WorkOrdersPage />}
+      {page === 'workorders' && <WorkOrdersPage onOpenPlanner={() => setPage('planner')} />}
       {page === 'people' && <PeoplePage />}
       {page === 'setup' && <SetupPage />}
       <AssistantWidget />
       <ShareSecurityModal open={shareOpen} onClose={() => setShareOpen(false)} />
     </div>
+  );
+}
+
+const NAV_ITEMS = [
+  ['planner', 'Planner', <GridIcon key="i" />, 'Planner'],
+  ['workorders', 'Work Orders', <ClipboardIcon key="i" />, 'Orders'],
+  ['people', 'People', <PeopleIcon key="i" />, 'People'],
+  ['setup', 'Setup', <GearIcon key="i" />, 'Setup'],
+] as const;
+
+/**
+ * The four main tabs. Desktop: inline pill group. Smaller screens (`fill`):
+ * a full-width row of equal tabs; on phones the icon sits above the label.
+ */
+function MainNav({
+  page,
+  setPage,
+  className,
+  fill = false,
+}: {
+  page: Page;
+  setPage: (p: Page) => void;
+  className?: string;
+  fill?: boolean;
+}) {
+  return (
+    <nav
+      className={cx('items-center gap-1 sm:gap-1.5 bg-[var(--surface-2)] p-1 sm:p-1.5 rounded-xl border border-[var(--line)] shadow-xs', className)}
+      aria-label="Main"
+    >
+      {NAV_ITEMS.map(([key, label, icon, short]) => {
+        const active = page === key;
+        return (
+          <button
+            key={key}
+            onClick={() => setPage(key)}
+            aria-current={active ? 'page' : undefined}
+            className={cx(
+              'flex items-center justify-center rounded-lg font-bold transition-all whitespace-nowrap',
+              fill
+                ? 'flex-1 min-w-0 flex-col sm:flex-row gap-0.5 sm:gap-2 px-1 sm:px-3 py-1 sm:py-1.5 text-[11px] sm:text-[13px]'
+                : 'gap-2 px-4 py-1.5 text-[13.5px]',
+              active
+                ? 'bg-[var(--surface)] text-ink shadow-sm border border-[var(--line-strong)]'
+                : 'border border-transparent text-ink-3 hover:text-ink hover:bg-[var(--surface-3)]/60',
+            )}
+          >
+            <span className={cx('transition-colors', active ? 'text-[var(--accent)]' : 'text-ink-3')}>{icon}</span>
+            {/* Phones get the short label so all four tabs fit */}
+            <span className="truncate max-w-full">
+              {fill ? (
+                <>
+                  <span className="sm:hidden">{short}</span>
+                  <span className="hidden sm:inline">{label}</span>
+                </>
+              ) : (
+                label
+              )}
+            </span>
+          </button>
+        );
+      })}
+    </nav>
   );
 }
 
@@ -237,27 +288,6 @@ function ClipboardIcon() {
       <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
       <path d="M9 12h6" />
       <path d="M9 16h6" />
-    </svg>
-  );
-}
-
-function Logo({ size = 32 }: { size?: number }) {
-  // Three staggered bars in the Morning / Evening / Night colours — a rotation.
-  // Fixed colours rather than theme variables, so the mark reads the same on
-  // dark and light and matches the favicon.
-  return (
-    <svg width={size} height={size} viewBox="0 0 64 64" aria-label="ShiftLine" role="img" className="shrink-0">
-      <defs>
-        <linearGradient id="sl-tile" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#1C2440" />
-          <stop offset="1" stopColor="#0B0F1A" />
-        </linearGradient>
-      </defs>
-      <rect width="64" height="64" rx="15" fill="url(#sl-tile)" />
-      <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="14.25" fill="none" stroke="#FFFFFF" strokeOpacity="0.14" strokeWidth="1.5" />
-      <rect x="11" y="15" width="32" height="9" rx="4.5" fill="#F5B040" />
-      <rect x="16.5" y="27.5" width="32" height="9" rx="4.5" fill="#34CDD3" />
-      <rect x="22" y="40" width="32" height="9" rx="4.5" fill="#8593FF" />
     </svg>
   );
 }

@@ -121,7 +121,8 @@ export function InsightsDrawer({
 /* ------------------------------------------------------------------ Issues */
 
 function IssuesTab({ onJump }: { onJump: (e: string | undefined, d: number | undefined) => void }) {
-  const { issues, roster, employees, codes, leave, paintCell } = useStore();
+  const { issues, roster, employees, codes, leave, paintCell, workOrders } = useStore();
+  const woNumber = (id: string) => workOrders.find((w) => w.id === id)?.workOrderId ?? id;
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const grouped = useMemo(() => {
@@ -166,7 +167,9 @@ function IssuesTab({ onJump }: { onJump: (e: string | undefined, d: number | und
 
             {list.map((issue) => {
               const canSuggest =
-                issue.rule === 'below-minimum' || issue.rule === 'empty-shift';
+                issue.rule === 'below-minimum' || issue.rule === 'empty-shift' ||
+                (issue.rule === 'work-order-short' && issue.dayIndex !== undefined);
+              const isWo = issue.rule === 'work-order-short' || issue.rule === 'work-order-data';
               const isOpen = expanded === issue.id;
               const suggestions =
                 canSuggest && isOpen && roster && issue.dayIndex !== undefined && issue.shiftCode
@@ -182,7 +185,18 @@ function IssuesTab({ onJump }: { onJump: (e: string | undefined, d: number | und
                     }}
                     className="w-full px-4 py-2.5 text-left hover:bg-[var(--surface-2)] transition-colors"
                   >
+                    {isWo && (
+                      <span className="mb-1 inline-flex items-center gap-1 rounded bg-[var(--sh-leave-bg)] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[var(--danger)]">
+                        {issue.rule === 'work-order-data' ? 'Work Orders · data' : 'Work Orders'}
+                      </span>
+                    )}
                     <p className="text-[12.5px] leading-snug">{issue.message}</p>
+                    {isWo && issue.workOrderIds && issue.workOrderIds.length > 0 && (
+                      <p className="mt-0.5 font-mono text-[11px] text-ink-3 truncate">
+                        WO {issue.workOrderIds.slice(0, 8).map(woNumber).join(', ')}
+                        {issue.workOrderIds.length > 8 ? ` +${issue.workOrderIds.length - 8} more` : ''}
+                      </p>
+                    )}
                     {canSuggest && (
                       <span className="mt-1 inline-block text-[11px] text-[var(--accent)]">
                         {isOpen ? 'Hide suggestions' : 'Show who can cover →'}
@@ -193,7 +207,9 @@ function IssuesTab({ onJump }: { onJump: (e: string | undefined, d: number | und
                   {isOpen && suggestions.length > 0 && (
                     <div className="px-4 pb-3 flex flex-col gap-1">
                       <p className="text-[11px] text-ink-3 mb-0.5">
-                        Off that day, not on leave, lightest month first:
+                        {isWo
+                          ? `Off that day, not on leave — assigning one adds them to ${issue.shiftCode} and the work orders update:`
+                          : 'Off that day, not on leave, lightest month first:'}
                       </p>
                       {suggestions.map((emp) => (
                         <button

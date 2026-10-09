@@ -7,7 +7,13 @@ import { exportBackup, importBackup, importBackupData, newId, resetToSeed } from
 import { WEEKDAY_LABELS } from '@/domain/calendar';
 import { formatHours, shiftHours } from '@/domain/hours';
 import type { Employee, Line, ResourceRequirement, ShiftCode, Weekday } from '@/domain/types';
-import { DEFAULT_ASSIGNED_PASSCODES, useAuth } from '@/features/auth/authStore';
+import { normalizeWorkType } from '@/domain/workload';
+import { codeFamily, type ShiftFamily } from '@/domain/workloadLive';
+import {
+  WORK_ORDER_COLUMNS, allWorkOrderColumns, fieldFromHeader, headerKey,
+  type ColumnType, type WorkOrderColumn,
+} from '@/domain/workOrderColumns';
+import { useAuth } from '@/features/auth/authStore';
 import type { AssignedPasscode, UserRole } from '@/features/auth/types';
 
 export function SetupPage() {
@@ -203,6 +209,9 @@ export function SetupPage() {
           resourceRequirements={resourceRequirements}
           onSave={saveResourceRequirement}
         />
+
+        {/* ------------------------------------- work-order Excel import columns */}
+        <ExcelColumnsSection />
 
         {/* ---------------------------------------------------- security */}
         {session?.role === 'supervisor' && <SecuritySettingsSection employees={employees} />}
@@ -687,10 +696,7 @@ function getAssignedUrl(passcode: string, assignedTo?: string): string {
   const cleanCode = encodeURIComponent((passcode || '').trim());
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173';
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
-  const userParam =
-    assignedTo && assignedTo !== 'General Team & Clients'
-      ? `&user=${encodeURIComponent(assignedTo.trim())}`
-      : '';
+  const userParam = assignedTo ? `&user=${encodeURIComponent(assignedTo.trim())}` : '';
   return `${origin}${pathname}?code=${cleanCode}${userParam}#/app`;
 }
 
@@ -698,7 +704,6 @@ function SecuritySettingsSection({ employees = [] }: { employees?: Employee[] })
   const { securitySettings, updateSecuritySettings, activeUsers } = useAuth();
   const toast = useToast();
 
-  const [sharedPasscode, setSharedPasscode] = useState(securitySettings.sharedPasscode);
   const [adminPassword, setAdminPassword] = useState(securitySettings.adminPassword || 'supervisor1');
   const [notifyOnLogin, setNotifyOnLogin] = useState(securitySettings.notifyOnLogin);
   const [soundAlert, setSoundAlert] = useState(securitySettings.soundAlert);
@@ -707,9 +712,7 @@ function SecuritySettingsSection({ employees = [] }: { employees?: Employee[] })
 
   // Assigned passcodes list
   const [assignedList, setAssignedList] = useState<AssignedPasscode[]>(
-    securitySettings.assignedPasscodes && securitySettings.assignedPasscodes.length > 0
-      ? securitySettings.assignedPasscodes
-      : DEFAULT_ASSIGNED_PASSCODES,
+    securitySettings.assignedPasscodes ?? [],
   );
 
   // Modal to assign new password & link
@@ -720,14 +723,11 @@ function SecuritySettingsSection({ employees = [] }: { employees?: Employee[] })
   const [draftNote, setDraftNote] = useState('');
 
   useEffect(() => {
-    setSharedPasscode(securitySettings.sharedPasscode);
     setAdminPassword(securitySettings.adminPassword || 'supervisor1');
     setNotifyOnLogin(securitySettings.notifyOnLogin);
     setSoundAlert(securitySettings.soundAlert);
     setRequireName(securitySettings.requireName);
-    if (securitySettings.assignedPasscodes && securitySettings.assignedPasscodes.length > 0) {
-      setAssignedList(securitySettings.assignedPasscodes);
-    }
+    setAssignedList(securitySettings.assignedPasscodes ?? []);
   }, [securitySettings]);
 
   // Check if a person is currently online
@@ -781,6 +781,11 @@ Open the link above (your name and password will be pre-filled) to view the sche
       toast('Please provide both recipient name and passcode.', 'error');
       return;
     }
+    const clash = assignedList.find((a) => a.passcode.trim().toLowerCase() === code.toLowerCase());
+    if (clash) {
+      toast(`Passcode "${code}" is already assigned to ${clash.assignedTo}. Use a different one.`, 'error');
+      return;
+    }
 
     const newEntry: AssignedPasscode = {
       id: `assign-${Date.now()}`,
@@ -800,27 +805,21 @@ Open the link above (your name and password will be pre-filled) to view the sche
   };
 
   const handleSave = () => {
-    const cleanPasscode = sharedPasscode.trim() || 'shiftline2026';
     const cleanAdminPass = adminPassword.trim() || 'supervisor1';
-    const syncedAssigned = assignedList.map((item) =>
-      item.id === 'assign-general' ? { ...item, passcode: cleanPasscode } : item,
-    );
     updateSecuritySettings({
-      sharedPasscode: cleanPasscode,
       adminPassword: cleanAdminPass,
-      assignedPasscodes: syncedAssigned,
+      assignedPasscodes: assignedList,
       notifyOnLogin,
       soundAlert,
       requireName,
     });
-    setAssignedList(syncedAssigned);
-    toast('Security settings and assigned passcodes saved successfully!', 'ok');
+    toast('Security settings and assigned passwords saved!', 'ok');
   };
 
   return (
     <Section
       title="Security & Access Passcodes"
-      description="Manage the supervisor master password, shareable team passcodes, and view all assigned passwords & direct links."
+      description="Manage the supervisor master password and each person's assigned password & direct link."
       action={
         <Button
           size="sm"
@@ -833,7 +832,7 @@ Open the link above (your name and password will be pre-filled) to view the sche
       }
     >
       <div className="bg-[var(--surface)] px-4 py-4 flex flex-col gap-5">
-        {/* Row 1: Supervisor Master Password & Default Shared Passcode */}
+        {/* Row 1: Supervisor Master Password */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field
             label="Supervisor Master Password"
@@ -855,40 +854,6 @@ Open the link above (your name and password will be pre-filled) to view the sche
                 type="button"
               >
                 {showAdminPass ? 'Hide' : 'Show'}
-              </Button>
-            </div>
-          </Field>
-
-          <Field
-            label="Default Shared Passcode"
-            hint="Fallback passcode for team members without a personalized link."
-          >
-            <div className="flex items-center gap-2">
-              <Input
-                type="text"
-                value={sharedPasscode}
-                onChange={(e) => setSharedPasscode(e.target.value)}
-                placeholder="e.g. shiftline2026"
-                className="font-mono font-semibold h-9"
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  const newCode = `shift-${Math.floor(1000 + Math.random() * 9000)}`;
-                  setSharedPasscode(newCode);
-                  const syncedAssigned = assignedList.map((item) =>
-                    item.id === 'assign-general' ? { ...item, passcode: newCode } : item,
-                  );
-                  setAssignedList(syncedAssigned);
-                  updateSecuritySettings({ sharedPasscode: newCode, assignedPasscodes: syncedAssigned });
-                  toast(`Generated new default passcode: ${newCode}`, 'ok');
-                }}
-                className="shrink-0 text-xs h-9 px-3 font-semibold"
-                type="button"
-                title="Generate random passcode"
-              >
-                Generate
               </Button>
             </div>
           </Field>
@@ -922,6 +887,11 @@ Open the link above (your name and password will be pre-filled) to view the sche
           </div>
 
           <div className="divide-y divide-[var(--line)]">
+            {assignedList.length === 0 && (
+              <div className="p-4 text-[11.5px] text-ink-3 text-center">
+                No one has a passcode yet. Click “Assign New Password &amp; Link” to add someone.
+              </div>
+            )}
             {assignedList.map((item) => {
               const isOnline = isUserOnline(item.assignedTo);
               const url = getAssignedUrl(item.passcode, item.assignedTo);
@@ -1004,6 +974,7 @@ Open the link above (your name and password will be pre-filled) to view the sche
             })}
           </div>
         </div>
+
 
         {/* Row 3: Notification & Security Policies */}
         <div className="border-t border-[var(--line)] pt-3.5 space-y-2.5">
@@ -1188,12 +1159,148 @@ Open the link above (your name and password will be pre-filled) to view the sche
                 Link Preview
               </span>
               <p className="font-mono text-[11px] text-ink-2 break-all select-all">
-                {getAssignedUrl(draftCode || 'shiftline2026', draftName)}
+                {getAssignedUrl(draftCode, draftName)}
               </p>
             </div>
           </div>
         </Modal>
       )}
+    </Section>
+  );
+}
+
+/**
+ * Which Excel columns the work-order import reads. The 11 yellow columns are
+ * built in; the supervisor can add more here — no code change needed.
+ */
+function ExcelColumnsSection() {
+  const { settings, updateSettings } = useStore();
+  const toast = useToast();
+  const custom = settings.customWorkOrderColumns ?? [];
+  const [header, setHeader] = useState('');
+  const [required, setRequired] = useState(true);
+  const [type, setType] = useState<ColumnType>('text');
+  const [note, setNote] = useState('');
+
+  const add = () => {
+    const h = header.trim();
+    if (!h) return toast('Type the column header exactly as it is in Excel.', 'error');
+    const taken = allWorkOrderColumns(custom).find((c) =>
+      [c.excelHeader, ...(c.aliases ?? [])].some((x) => headerKey(x) === headerKey(h)),
+    );
+    if (taken) return toast(`"${h}" is already read (as "${taken.excelHeader}").`, 'error');
+    const col: WorkOrderColumn = {
+      excelHeader: h,
+      appField: fieldFromHeader(h),
+      required,
+      type,
+      usedFor: note.trim() || 'Added in Setup',
+    };
+    void updateSettings({ customWorkOrderColumns: [...custom, col] });
+    setHeader('');
+    setNote('');
+    toast(`"${h}" added. Import the Excel file again to read it.`, 'ok');
+  };
+
+  const update = (i: number, patch: Partial<WorkOrderColumn>) =>
+    void updateSettings({ customWorkOrderColumns: custom.map((c, j) => (j === i ? { ...c, ...patch } : c)) });
+  const remove = (i: number) => {
+    void updateSettings({ customWorkOrderColumns: custom.filter((_, j) => j !== i) });
+    toast('Column removed. Import again to drop it from the work orders.', 'ok');
+  };
+
+  const TYPES: { id: ColumnType; label: string }[] = [
+    { id: 'text', label: 'Text' },
+    { id: 'number', label: 'Number' },
+    { id: 'date', label: 'Date' },
+    { id: 'line', label: 'Line (L4/L5/L6)' },
+  ];
+
+  return (
+    <Section
+      title="Excel import columns"
+      description="The work-order import reads only these columns, matched by header name; every other column is ignored. Add a column here and the next import reads and checks it."
+    >
+      <div className="bg-[var(--surface)] p-4 sm:p-5 flex flex-col gap-5">
+        {/* Built-in yellow columns */}
+        <div>
+          <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-ink-3">
+            Built-in yellow columns · {WORK_ORDER_COLUMNS.length}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {WORK_ORDER_COLUMNS.map((c) => (
+              <span
+                key={c.excelHeader}
+                title={c.usedFor}
+                className="px-2 py-1 rounded-lg text-[12px] font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-300 border border-amber-500/30"
+              >
+                {c.excelHeader}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {/* Added columns */}
+        <div>
+          <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-ink-3">
+            Added columns · {custom.length}
+          </div>
+          {custom.length === 0 ? (
+            <p className="text-[12.5px] text-ink-3">None yet. Add one below.</p>
+          ) : (
+            <div className="flex flex-col divide-y divide-[var(--line)] rounded-xl border border-[var(--line)]">
+              {custom.map((c, i) => (
+                <div key={c.excelHeader} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[13px] font-semibold text-ink truncate">{c.excelHeader}</div>
+                    <div className="text-[11.5px] text-ink-3 truncate">{c.usedFor}</div>
+                  </div>
+                  <span className="font-mono text-[11px] text-ink-3">{TYPES.find((t) => t.id === c.type)?.label}</span>
+                  <Switch checked={c.required} onChange={(v) => update(i, { required: v })} label="Mandatory" />
+                  <button
+                    type="button"
+                    onClick={() => remove(i)}
+                    className="text-[12px] font-bold text-rose-400 hover:text-rose-300 px-1.5"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Add form */}
+        <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)]/50 p-3.5 flex flex-col gap-3">
+          <div className="text-[12.5px] font-bold text-ink">Add a column</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Excel header (exactly as in the file)">
+              <Input value={header} onChange={(e) => setHeader(e.target.value)} placeholder="e.g. Priority" />
+            </Field>
+            <Field label="Type">
+              <Select value={type} onChange={(e) => setType(e.target.value as ColumnType)}>
+                {TYPES.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="What it's for (optional)">
+              <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Job priority P1–P4" />
+            </Field>
+            <div className="flex items-end pb-1.5">
+              <Switch checked={required} onChange={setRequired} label="Mandatory (report blank cells)" />
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[11.5px] text-ink-3">
+              After adding, import the Excel file again. Values show on each work order and in the CSV export.
+            </span>
+            <Button variant="primary" size="sm" onClick={add}>
+              Add column
+            </Button>
+          </div>
+        </div>
+      </div>
     </Section>
   );
 }
@@ -1205,8 +1312,27 @@ function ResourceRequirementsSection({
   resourceRequirements: ResourceRequirement[];
   onSave: (req: ResourceRequirement) => Promise<void>;
 }) {
-  const [activeLine, setActiveLine] = useState<'L4' | 'L5' | 'L6'>('L5');
+  // Line 4 & 6 are one team with one set of standards, stored under L4
+  const [activeLine, setActiveLine] = useState<'L4' | 'L5'>('L5');
+  const lineLabel = activeLine === 'L4' ? 'Line 4 & 6' : 'Line 5';
   const toast = useToast();
+  const { codesByLine, workload, workOrders } = useStore();
+  const workOrderTypes = useMemo(
+    () => new Map(workOrders.map((w) => [w.id, normalizeWorkType(w.workType)])),
+    [workOrders],
+  );
+
+  // Real shift times from this line's codes (Setup → shift codes)
+  const lineCodesList = codesByLine[activeLine === 'L4' ? 'line4' : 'line5'] ?? [];
+  const timingOf = (fam: ShiftFamily) =>
+    (lineCodesList.find((c) => c.id === fam) ?? lineCodesList.find((c) => codeFamily(c.id, lineCodesList) === fam))?.timing ?? '';
+
+  /** How many work orders currently take their crew size from a standard. */
+  const usage = (type: string, fam?: ShiftFamily) =>
+    Object.values(workload.byWo).filter(
+      (a) => a.crewFromStandard && (activeLine === 'L4' ? a.lineCode !== 'L5' : a.lineCode === 'L5') && (!fam || a.shift === fam) &&
+        (workOrderTypes.get(a.woId) ?? '') === type,
+    ).length;
 
   const lineRequirements = useMemo(() => {
     return resourceRequirements.filter((r) => r.line === activeLine);
@@ -1218,13 +1344,16 @@ function ResourceRequirementsSection({
       defaultPeopleCount: Math.max(1, newCount),
     };
     await onSave(updated);
-    toast(`Updated ${activeLine} ${req.workType} (${req.shift}) default to ${updated.defaultPeopleCount} people.`, 'ok');
+    toast(
+      `${lineLabel} ${req.workType} ${req.shift === 'all' ? '' : req.shift + ' '}standard is now ${updated.defaultPeopleCount}. Work Orders and Planner issues updated.`,
+      'ok',
+    );
   };
 
   const shiftsConfig = [
-    { id: 'morning', label: 'Morning Shift', icon: '🌅', timing: '07:00 – 15:00' },
-    { id: 'evening', label: 'Evening Shift', icon: '🌆', timing: '15:00 – 23:00' },
-    { id: 'night', label: 'Night Shift', icon: '🌙', timing: '23:00 – 07:00' },
+    { id: 'morning', fam: 'M', label: 'Morning Shift', icon: '🌅' },
+    { id: 'evening', fam: 'E', label: 'Evening Shift', icon: '🌆' },
+    { id: 'night', fam: 'N', label: 'Night Shift', icon: '🌙' },
   ] as const;
 
   const acsReq = lineRequirements.find((r) => r.workType === 'ACS');
@@ -1232,7 +1361,7 @@ function ResourceRequirementsSection({
   return (
     <Section
       title="Work Order Resource Standards"
-      description="Baseline staff allocations for Line activities (PM / CM / ACS), derived from the October Monthly Planning pattern to guide November Work Order assignments."
+      description="Crew size per work order (PM / CM / ACS) for each line and shift. Used whenever the imported Excel row gives no crew size — change a number and Work Orders, buffers and Planner issues update immediately."
     >
       <div className="bg-[var(--surface)] p-5 flex flex-col gap-5">
         {/* Line Switcher */}
@@ -1240,7 +1369,7 @@ function ResourceRequirementsSection({
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-ink-2 uppercase tracking-wider">Select Line:</span>
             <div className="flex items-center gap-1.5 bg-[var(--surface-2)] p-1 rounded-xl border border-[var(--line)]">
-              {(['L4', 'L5', 'L6'] as const).map((line) => (
+              {(['L4', 'L5'] as const).map((line) => (
                 <button
                   key={line}
                   type="button"
@@ -1252,14 +1381,14 @@ function ResourceRequirementsSection({
                       : 'text-ink-3 hover:text-ink hover:bg-[var(--surface-3)]/60',
                   )}
                 >
-                  Production Line {line.replace('L', '')}
+                  {line === 'L4' ? 'Line 4 & 6 (one team)' : 'Line 5'}
                 </button>
               ))}
             </div>
           </div>
 
           <span className="text-xs font-semibold text-ink-3">
-            Line {activeLine.replace('L', '')} Resource Standards
+            {lineLabel} Resource Standards
           </span>
         </div>
 
@@ -1268,7 +1397,7 @@ function ResourceRequirementsSection({
           {shiftsConfig.map((shift) => {
             const pmReq = lineRequirements.find((r) => r.shift === shift.id && r.workType === 'PM');
             const cmReq = lineRequirements.find((r) => r.shift === shift.id && r.workType === 'CM');
-            const totalStaff = (pmReq?.defaultPeopleCount ?? 0) + (cmReq?.defaultPeopleCount ?? 0);
+            const ordersUsing = usage('PM', shift.fam) + usage('CM', shift.fam);
 
             return (
               <div
@@ -1281,11 +1410,14 @@ function ResourceRequirementsSection({
                     <span className="text-xl">{shift.icon}</span>
                     <div>
                       <h4 className="font-bold text-ink text-[13.5px] leading-tight">{shift.label}</h4>
-                      <span className="text-[11px] font-mono text-ink-3">{shift.timing}</span>
+                      <span className="text-[11px] font-mono text-ink-3">{timingOf(shift.fam)}</span>
                     </div>
                   </div>
-                  <span className="px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-[var(--surface-3)] text-ink-2 border border-[var(--line)]">
-                    {totalStaff} staff
+                  <span
+                    className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[var(--surface-3)] text-ink-2 border border-[var(--line)]"
+                    title="Work orders on this line & shift whose crew size comes from these standards"
+                  >
+                    {ordersUsing} order{ordersUsing === 1 ? '' : 's'} use this
                   </span>
                 </div>
 
@@ -1385,7 +1517,7 @@ function ResourceRequirementsSection({
                     ACS
                   </span>
                   <h4 className="font-bold text-ink text-sm">Access Control &amp; System Audits</h4>
-                  <span className="text-[11px] text-ink-3">· All Shifts / Dedicated Line Quota</span>
+                  <span className="text-[11px] text-ink-3">· All shifts · {usage('ACS')} order{usage('ACS') === 1 ? '' : 's'} use this</span>
                 </div>
                 <p className="text-[11.5px] text-ink-3 mt-0.5">
                   Standard personnel reserved for site access, security verification, and regulatory line audits.
@@ -1414,7 +1546,7 @@ function ResourceRequirementsSection({
               >
                 +
               </button>
-              <span className="text-xs text-ink-3 font-semibold px-2">staff</span>
+              <span className="text-xs text-ink-3 font-semibold px-2">per order</span>
             </div>
           </div>
         )}
@@ -1423,7 +1555,7 @@ function ResourceRequirementsSection({
         <div className="text-[12px] text-ink-3 bg-[var(--surface-2)]/60 p-3 rounded-xl border border-[var(--line)]/60 flex items-center gap-2.5">
           <span className="text-base">💡</span>
           <span>
-            These manpower quotas govern default crew counts for Work Orders on Line {activeLine.replace('L', '')}. When importing November Work Orders, activities without explicit resource demands automatically adopt these values.
+            Each number is the crew <strong>one</strong> work order needs on {lineLabel}. It applies to rows whose Excel file gave no crew size (tagged &quot;Setup standard&quot; in Work Orders). Rows with a crew size in the file, or changed by hand with −/+, keep their own number — use &quot;↺ Use standard&quot; there to switch back.
           </span>
         </div>
       </div>

@@ -91,13 +91,14 @@ export function PeoplePage() {
                     <span className="truncate text-[13px] font-medium">{employee.name}</span>
                     {isLeaderEmployee(employee) && (
                       <span className="shrink-0 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-px text-[9.5px] uppercase tracking-wide font-semibold flex items-center gap-0.5">
-                        <span>👑</span>
-                        <span>Leader</span>
+                        <span title="Team leader">👑</span>
+                        <span className="hidden sm:inline">Leader</span>
                       </span>
                     )}
                     {employee.pinned && (
-                      <span className="shrink-0 rounded bg-[var(--surface-3)] px-1.5 py-px text-[9.5px] uppercase tracking-wide text-ink-3">
-                        fixed
+                      <span className="shrink-0 rounded bg-[var(--surface-3)] px-1.5 py-px text-[9.5px] uppercase tracking-wide text-ink-3" title="Fixed — never auto-rotated">
+                        <span className="sm:hidden">📌</span>
+                        <span className="hidden sm:inline">fixed</span>
                       </span>
                     )}
                   </span>

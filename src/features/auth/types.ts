@@ -46,30 +46,39 @@ export function getAssignedUrl(passcode: string, assignedTo?: string): string {
   const cleanCode = encodeURIComponent((passcode || '').trim());
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173';
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
-  const userParam =
-    assignedTo && assignedTo !== 'General Team & Clients'
-      ? `&user=${encodeURIComponent(assignedTo.trim())}`
-      : '';
+  const userParam = assignedTo ? `&user=${encodeURIComponent(assignedTo.trim())}` : '';
   return `${origin}${pathname}?code=${cleanCode}${userParam}#/app`;
 }
 
 export interface SecuritySettings {
-  /** The shared link passcode given to team members/clients (default: "shiftline2026") */
-  sharedPasscode: string;
+  /** Last time the supervisor saved settings; newer copy wins when syncing with the server */
+  updatedAt?: number;
   /** Recent allowed passcodes so newly generated passcodes work immediately across all sessions */
   recentPasscodes?: string[];
-  /** Detailed list of individual passcodes and assigned links */
+  /** Each person's own passcode & link — the only way team members unlock the roster */
   assignedPasscodes?: AssignedPasscode[];
   /** Admin master password for supervisors */
   adminPassword: string;
-  /** Whether entering a name is required when unlocking via shared passcode */
+  /** Whether entering a name is required when unlocking */
   requireName: boolean;
   /** Whether to trigger an alert when someone logs in via the shared link */
   notifyOnLogin: boolean;
   /** Audio chime sound when a login notification arrives */
   soundAlert: boolean;
-  /** Default role assigned to shared passcode users */
-  defaultSharedRole: UserRole;
+}
+
+/** Finds the active (not revoked) assigned passcode entry matching the input, case-insensitively. */
+export function matchPasscode(
+  settings: Pick<SecuritySettings, 'assignedPasscodes'>,
+  passcode: string,
+): AssignedPasscode | null {
+  const clean = (passcode || '').trim().toLowerCase();
+  if (!clean) return null;
+  return (
+    (settings.assignedPasscodes || []).find(
+      (a) => a.status !== 'revoked' && (a.passcode || '').trim().toLowerCase() === clean,
+    ) ?? null
+  );
 }
 
 export type CollabBroadcastMessage =

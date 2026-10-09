@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 
+import { AlstomLogo } from '@/components/AlstomLogo';
 import { Button, Input, cx } from '@/components/ui';
 
 import { useAuth } from './authStore';
@@ -118,10 +119,8 @@ export function LoginGate({ onBackToHome }: Props) {
       >
         {/* Brand & Security Header */}
         <div className="text-center space-y-2.5">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500/20 via-[var(--surface-3)] to-blue-500/20 border border-[var(--line-strong)] shadow-inner mb-0.5">
-            <span className="text-2xl" role="img" aria-label="Shield">
-              🛡️
-            </span>
+          <div className="flex justify-center pt-1 pb-1.5">
+            <AlstomLogo height={24} />
           </div>
 
           <div>
@@ -191,7 +190,7 @@ export function LoginGate({ onBackToHome }: Props) {
           </motion.div>
         )}
 
-        {/* Mode: Shared Passcode Access */}
+        {/* Mode: Assigned Passcode Access */}
         {mode === 'passcode' ? (
           <form onSubmit={handlePasscodeSubmit} className="space-y-4">
             <div className="space-y-1.5">
@@ -242,7 +241,7 @@ export function LoginGate({ onBackToHome }: Props) {
                   type={showPassword ? 'text' : 'password'}
                   value={passcode}
                   onChange={(e) => setPasscode(e.target.value)}
-                  placeholder="Enter shared passcode"
+                  placeholder="Enter your assigned passcode"
                   required
                   className="bg-[var(--surface-2)] text-xs h-10 px-3 pl-8 rounded-xl font-mono tracking-wide"
                 />

@@ -11,6 +11,8 @@ export interface AiContext {
   employees: DomainEmployee[];
   codes: DomainCode[];
   leave: DomainLeave[];
+  /** Live Work Orders / staffing summary from the web app (plain text). */
+  workOrders?: string;
 }
 
 export interface ProposedAction {
@@ -69,12 +71,33 @@ function describe(ctx: AiContext): string {
   lines.push(`Current issues (${issues.length}):`);
   for (const i of issues.slice(0, 40)) lines.push(`  [${i.severity}] ${i.message}`);
   if (issues.length > 40) lines.push(`  …and ${issues.length - 40} more`);
+  if (ctx.workOrders) {
+    lines.push('');
+    lines.push(ctx.workOrders);
+  }
   return lines.join('\n');
 }
 
-const SYSTEM = `You are ShiftLine's roster assistant for a supervisor running a three-shift operation (Morning, Evening, Night) with fixed weekly rest days per person.
+/**
+ * How the ShiftLine app works — so the assistant can answer "how do I…" and
+ * "why does it show…" questions, not just questions about the grid.
+ */
+const APP_GUIDE = `HOW SHIFTLINE WORKS (ALSTOM signalling & communication maintenance, Lines 4, 5, 6)
+Pages (top bar): Planner, Work Orders, People, Setup. Plus Share Link, notifications, Ask ShiftLine (you).
+- Planner: monthly grid per line. Brush codes: M Morning, E Evening, N Night, ML/MT Morning variants, EL/ET Evening variants, NL/NT Night variants, GS General Shift, P Project, LV leave, - rest. "Generate month" builds from people's rules; "Auto-rotate" builds next month. Every edit autosaves in the browser; Ctrl+Z undoes. Insights panel → Issues (Must fix / Worth a look), Coverage, Hours, Fairness. "Show who can cover →" on a shortfall lists people off that day and assigns them in one click.
+- People: per line; name, default shift, rest days, rotation, leader, fixed. Line 4 and Line 6 are ONE shared team: their work orders use the people of both lines together.
+- Work Orders: imported from Excel (Import Excel). Only the 11 yellow columns are read, by header name: Work Order, Description, Location, Reported Date, Start No Earlier Than, Target Start, Scheduled Start, Finish No Later Than, Div / Depart, Line, Asset Group. Missing columns/blank cells appear in the Import report ("Row 45: Scheduled Start missing").
+  Each order is placed on its Scheduled Start date and a shift (its own choice, else CM→Evening, PM needing 4+→Night, otherwise Morning). Available staff = people of the line's team on that shift family that day in the Planner (M/ML/MT count as Morning; GS, leave, rest do not). Demand = sum of crew needed by that day's orders on that shift. Buffer = Available − Demand; negative = staff deficit. People are assigned without double-booking. All of this recalculates live on every Planner edit.
+  Statuses: Staffed, Shortfall (some but not enough), Unassigned/Nobody free, No roster (line has no people), Not placed (no valid Scheduled Start or Line). Window checks: "outside window" = Scheduled Start before Start No Earlier Than or after Finish No Later Than; "past FNLT" = Finish No Later Than before today. Target Start and Reported Date are reference (target slip, age).
+  Crew size: from Setup → Work Order Resource Standards per line/type/shift (tagged "Setup standard"), or set by hand with −/+ on the row. Work type from Description keywords: fault/repair/breakdown/corrective → CM; ACS/audit → ACS; else PM. "Manage Crew" lets you hand-pick people who are on that shift that day.
+- Setup: lines, shift codes (timings, minimum headcount, family/tone), Work Order Resource Standards (Line 4 & 6 share one set), security (supervisor password, each person's own passcode & link; revoke anytime), backups.
+How to fix a work-order deficit: add people to that shift on that day in the Planner (or Insights → Show who can cover → Assign), move the order's shift, or lower its Required People.`;
 
-Answer questions about the roster plainly and briefly, in the supervisor's terms. Use day numbers and people's names, not ids, in the answer text.
+const SYSTEM = `You are ShiftLine's assistant for a supervisor running a three-shift operation (Morning, Evening, Night) with fixed weekly rest days per person, and the maintenance work orders that need staff on those shifts.
+
+${APP_GUIDE}
+
+Answer plainly and briefly, in the supervisor's terms. Use day numbers, dates, people's names and work order numbers, not internal ids, in the answer text. For questions about work orders, deficits, imports or standards, use the WORK ORDERS section of the context. For "how do I…" questions, give the exact clicks in the app.
 
 If the supervisor asks you to CHANGE the roster, propose the specific cell edits as actions. Each action sets one person on one day to one code. Rules you must respect:
 - Never put someone on a day inside their leave block.

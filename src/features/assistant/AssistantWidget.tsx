@@ -9,6 +9,8 @@ import { codeVars } from '@/app/tones';
 import { useViewport } from '@/app/useViewport';
 import { Button, cx, useToast } from '@/components/ui';
 
+import { QUICK_HELP, buildWorkOrderContext } from './appKnowledge';
+
 interface Turn {
   role: 'user' | 'assistant';
   content: string;
@@ -18,7 +20,9 @@ interface Turn {
 
 const SUGGESTIONS = [
   'Which days are short-staffed?',
+  'Which work orders are short this month, and how do I fix them?',
   'Who can cover Night on the short days?',
+  'Are there import problems in the work-order file?',
   'Summarise this month in three lines.',
   'Who has worked the most nights?',
 ];
@@ -112,7 +116,7 @@ export function AssistantWidget() {
 /* ------------------------------------------------------------------- chat */
 
 function Chat({ onClose }: { onClose: () => void }) {
-  const { settings, roster, employees, codes, leave, paintCell } = useStore();
+  const { settings, roster, employees, codes, leave, paintCell, workOrders, workload, resourceRequirements } = useStore();
   const toast = useToast();
   const [user, setUser] = useState<CloudUser | null>(getUser());
   const [publicAi, setPublicAi] = useState<boolean | null>(null);
@@ -158,7 +162,11 @@ function Chat({ onClose }: { onClose: () => void }) {
         month: settings.activeMonth,
         question: q,
         history: turns.slice(-6).map((t) => ({ role: t.role, content: t.content })),
-        context: { roster, employees, codes, leave },
+        context: {
+          roster, employees, codes, leave,
+          // Live Work Orders / staffing summary, so answers match the Work Orders page
+          workOrders: buildWorkOrderContext({ settings, workOrders, workload, requirements: resourceRequirements }),
+        },
       });
       setTurns((t) => [...t, { role: 'assistant', content: reply.answer, reply }]);
     } catch (e) {
@@ -197,15 +205,19 @@ function Chat({ onClose }: { onClose: () => void }) {
       {publicAi === null ? (
         <div className="flex-1 grid place-items-center text-[12px] text-ink-3">Connecting…</div>
       ) : serverDown ? (
-        <div className="flex-1 flex flex-col justify-center gap-2 px-6 text-center">
-          <p className="text-[13px] font-medium">The assistant is offline</p>
-          <p className="text-[12px] text-ink-3 leading-relaxed">
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2 pt-5 text-center">
+          <p className="px-6 text-[13px] font-medium">The assistant is offline</p>
+          <p className="px-6 text-[12px] text-ink-3 leading-relaxed">
             The ShiftLine server is not running. Start it with{' '}
             <code className="font-mono text-ink-2">cd server &amp;&amp; npm run dev</code>, then reopen this chat.
           </p>
+          <QuickHelp />
         </div>
       ) : !canChat ? (
-        <SignIn onDone={setUser} />
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <SignIn onDone={setUser} />
+          <QuickHelp />
+        </div>
       ) : (
         <>
           <div ref={scroller} className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-3">
@@ -336,6 +348,33 @@ function Chat({ onClose }: { onClose: () => void }) {
         </>
       )}
     </>
+  );
+}
+
+/* ------------------------------------------------------------- quick help */
+
+/** Built-in answers that work without the AI server. */
+function QuickHelp() {
+  const [open, setOpen] = useState<number | null>(null);
+  return (
+    <div className="px-4 pb-4 text-left">
+      <p className="mb-2 text-[10.5px] font-semibold uppercase tracking-wider text-ink-3">Quick help</p>
+      <div className="flex flex-col gap-1.5">
+        {QUICK_HELP.map((h, i) => (
+          <div key={h.q} className="rounded-lg border border-[var(--line)] bg-[var(--surface-2)]">
+            <button
+              type="button"
+              onClick={() => setOpen(open === i ? null : i)}
+              className="w-full px-3 py-2 text-left text-[12.5px] font-medium text-ink flex items-center justify-between gap-2"
+            >
+              {h.q}
+              <span className="text-ink-3">{open === i ? '−' : '+'}</span>
+            </button>
+            {open === i && <p className="px-3 pb-2.5 text-[12px] leading-relaxed text-ink-2">{h.a}</p>}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

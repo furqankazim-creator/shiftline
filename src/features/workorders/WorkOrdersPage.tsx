@@ -4,8 +4,58 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useStore } from '@/app/store';
 import { Button, Modal, Select, useToast } from '@/components/ui';
 import { db } from '@/data/db';
-import type { Employee, WorkOrder } from '@/domain/types';
-import { lineCodeToId, normalizeLineCode, normalizeWorkType, parseDateToIso } from '@/domain/workload';
+import type { Employee, ShiftCode, WorkOrder } from '@/domain/types';
+import { lineCodeToId, normalizeLineCode, normalizeWorkType, parseDateToIso, parseLineCode, tryParseDate } from '@/domain/workload';
+import { WORK_TYPE_RULES, allWorkOrderColumns, type WorkOrderColumn } from '@/domain/workOrderColumns';
+import {
+  POOL_LINES, SHIFT_FAMILIES, SHIFT_LABEL, codeFamily, poolOfLineId, usesStandardCrew, windowCheck, workOrderShift,
+  type LiveAllocation, type ShiftDayBalance, type ShiftFamily,
+} from '@/domain/workloadLive';
+
+type LineGroup = 'L4_L6' | 'L5' | 'ALL';
+const GROUP_LINES: Record<LineGroup, string[]> = { L4_L6: ['L4', 'L6'], L5: ['L5'], ALL: ['L4', 'L5', 'L6'] };
+const GROUP_LABEL: Record<LineGroup, string> = { L4_L6: 'Line 4 & 6 (one team)', L5: 'Line 5', ALL: 'All Lines' };
+
+/** Timing text for a shift family from the line's own codes (Setup), e.g. "06:00 – 15:00". */
+function shiftTiming(codes: ShiftCode[] | undefined, shift: ShiftFamily): string {
+  const exact = codes?.find((c) => c.id === shift);
+  const fam = exact ?? codes?.find((c) => codeFamily(c.id, codes) === shift);
+  return fam?.timing ?? '';
+}
+
+/**
+ * useState that survives leaving the page: the Work Orders view is rebuilt each
+ * time you open it, so line, day and filters are kept in this browser.
+ */
+const VIEW_KEY = 'shiftline.workorders.view.v1';
+function readView(): Record<string, unknown> {
+  try {
+    return JSON.parse(localStorage.getItem(VIEW_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+function useViewState<T>(field: string, initial: T): [T, (v: T) => void] {
+  const [value, setValue] = useState<T>(() => {
+    const saved = readView()[field];
+    return saved === undefined ? initial : (saved as T);
+  });
+  const set = (v: T) => {
+    setValue(v);
+    try {
+      localStorage.setItem(VIEW_KEY, JSON.stringify({ ...readView(), [field]: v }));
+    } catch {
+      /* storage unavailable — the choice just isn't remembered */
+    }
+  };
+  return [value, set];
+}
+
+function weekdayDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map((n) => parseInt(n, 10));
+  const dt = new Date(y, m - 1, d);
+  return isNaN(dt.getTime()) ? iso : dt.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+}
 
 function formatDisplayDate(raw: string | undefined): string {
   if (!raw) return '—';
@@ -98,14 +148,15 @@ const Icons = {
   ),
 };
 
-export function WorkOrdersPage() {
+export function WorkOrdersPage({ onOpenPlanner }: { onOpenPlanner?: () => void } = {}) {
   const {
     settings,
     workOrders,
-    shiftBalances,
-    workloadConflicts,
+    workload,
+    openSheet,
+    staffForShift,
+    codesByLine,
     uploadWorkOrders,
-    allocateResources,
     saveWorkOrder,
     removeWorkOrder,
     clearWorkOrders,
@@ -116,15 +167,21 @@ export function WorkOrdersPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Filters state (Line 4 & 6 combined, Line 5 separate)
-  const [selectedLine, setSelectedLine] = useState<string>('L4_L6');
-  const [selectedType, setSelectedType] = useState<string>('ALL');
-  const [selectedShift, setSelectedShift] = useState<string>('ALL');
-  const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
+  // First visit: start on the line group of the line open in the Planner
+  const [selectedLine, setSelectedLine] = useViewState<LineGroup>(
+    'line',
+    settings.activeLineId === 'line5' ? 'L5' : 'L4_L6',
+  );
+  // Day shown in the shift cards; null = automatically the worst day of the selected lines
+  const [pickedDate, setPickedDate] = useViewState<string | null>('date', null);
+  const [selectedType, setSelectedType] = useViewState<string>('type', 'ALL');
+  const [selectedShift, setSelectedShift] = useViewState<string>('shift', 'ALL');
+  const [savedStatus, setSelectedStatus] = useViewState<string>('status', 'ALL');
+  const selectedStatus = ['ALL', 'OK', 'SHORT', 'UNASSIGNED'].includes(savedStatus) ? savedStatus : 'ALL';
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Editing modal & states
   const [editingWo, setEditingWo] = useState<WorkOrder | null>(null);
-  const [isAllocating, setIsAllocating] = useState(false);
   const [showConflictsExpanded, setShowConflictsExpanded] = useState(false);
   const [showYellowGuide, setShowYellowGuide] = useState(false);
 
@@ -133,41 +190,56 @@ export function WorkOrdersPage() {
     if (!workOrders || workOrders.length === 0) return;
     const malformed = workOrders.filter(
       (wo) =>
-        (wo.scheduledStart && !wo.scheduledStart.match(/^\d{4}-\d{2}-\d{2}$/)) ||
-        (wo.scheduledFinish && !wo.scheduledFinish.match(/^\d{4}-\d{2}-\d{2}$/)),
+        (wo.scheduledStart && !/^\d{4}-\d{2}-\d{2}$/.test(String(wo.scheduledStart)) && tryParseDate(wo.scheduledStart)) ||
+        (wo.scheduledFinish && !/^\d{4}-\d{2}-\d{2}$/.test(String(wo.scheduledFinish)) && tryParseDate(wo.scheduledFinish)),
     );
     if (malformed.length > 0) {
       Promise.all(
         malformed.map((wo) =>
+          // Only rewrite dates that can actually be read — never invent one
           saveWorkOrder({
             ...wo,
-            scheduledStart: parseDateToIso(wo.scheduledStart),
-            scheduledFinish: parseDateToIso(wo.scheduledFinish),
+            scheduledStart: tryParseDate(wo.scheduledStart) ?? wo.scheduledStart,
+            scheduledFinish: tryParseDate(wo.scheduledFinish) ?? wo.scheduledFinish,
           }),
         ),
       ).catch(() => {});
     }
   }, [workOrders, saveWorkOrder]);
 
+  // Columns added in Setup → Excel import columns (shown on rows and exported)
+  const extraColumns = settings.customWorkOrderColumns ?? [];
+  const extraChips = (wo: WorkOrder) =>
+    extraColumns
+      .filter((c) => wo.extra?.[c.appField])
+      .map((c) => (
+        <span key={c.appField} className="px-1.5 py-0.5 rounded text-[11px] font-semibold bg-[var(--surface-3)] text-ink-2 border border-[var(--line)]">
+          {c.excelHeader}: {wo.extra?.[c.appField]}
+        </span>
+      ));
+
+  const todayIso = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }, []);
+  /** Rows without a valid line only show under "All Lines". */
+  const inGroup = (wo: WorkOrder, g: LineGroup) => {
+    const l = parseLineCode(wo.line);
+    return l ? GROUP_LINES[g].includes(l) : g === 'ALL';
+  };
+
   // Filtered work orders (supports Line 4 & 6 combined)
   const filteredWorkOrders = useMemo(() => {
     return workOrders.filter((wo) => {
-      const lineCode = normalizeLineCode(wo.line);
-      if (selectedLine === 'L4_L6') {
-        if (lineCode !== 'L4' && lineCode !== 'L6') return false;
-      } else if (selectedLine === 'L5') {
-        if (lineCode !== 'L5') return false;
-      } else if (selectedLine !== 'ALL') {
-        if (lineCode !== selectedLine) return false;
-      }
+      if (!inGroup(wo, selectedLine)) return false;
+      const live = workload.byWo[wo.id];
 
       if (selectedType !== 'ALL' && normalizeWorkType(wo.workType) !== selectedType) return false;
-      if (selectedShift !== 'ALL' && wo.plannedShift !== selectedShift) return false;
+      if (selectedShift !== 'ALL' && workOrderShift(wo) !== selectedShift) return false;
       if (selectedStatus !== 'ALL') {
-        if (selectedStatus === 'OK' && wo.allocationStatus !== 'OK') return false;
-        if (selectedStatus === 'SHORT' && wo.allocationStatus !== 'SHORT') return false;
-        if (selectedStatus === 'UNASSIGNED' && (wo.allocationStatus === 'OK' || wo.allocationStatus === 'SHORT'))
-          return false;
+        if (selectedStatus === 'SHORT' && live?.status !== 'SHORT') return false;
+        if (selectedStatus === 'OK' && live?.status !== 'OK') return false;
+        if (selectedStatus === 'UNASSIGNED' && live?.status !== 'UNASSIGNED' && live?.status !== 'NO_ROSTER') return false;
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -178,41 +250,98 @@ export function WorkOrdersPage() {
       }
       return true;
     });
-  }, [workOrders, selectedLine, selectedType, selectedShift, selectedStatus, searchQuery]);
+  }, [workOrders, workload, selectedLine, selectedType, selectedShift, selectedStatus, searchQuery, todayIso]);
+
+  // ---- Live figures for the selected line group (all recomputed from the Planner roster)
+  const groupLines = GROUP_LINES[selectedLine];
+  const groupConflicts = useMemo(
+    () => workload.conflicts.filter((c) => groupLines.includes(c.lineCode)).sort((a, b) => a.date.localeCompare(b.date)),
+    [workload, groupLines],
+  );
+
+  /** Sum of the staff pools in a group for each date + shift (Line 4 & 6 is already one pool). */
+  const combineBalances = (lines: string[]) => {
+    const map = new Map<string, ShiftDayBalance>();
+    for (const b of workload.balances) {
+      if (!POOL_LINES[b.pool].codes.some((c) => lines.includes(c))) continue;
+      const k = `${b.date}|${b.shift}`;
+      const cur = map.get(k);
+      map.set(k, cur ? { ...cur, onDuty: cur.onDuty + b.onDuty, demand: cur.demand + b.demand, pm: cur.pm + b.pm, cm: cur.cm + b.cm, acs: cur.acs + b.acs, buffer: cur.buffer + b.buffer, orders: cur.orders + b.orders } : { ...b });
+    }
+    return [...map.values()];
+  };
+  const groupBalances = useMemo(() => combineBalances(groupLines), [workload, groupLines]);
+  const groupDates = useMemo(() => [...new Set(groupBalances.map((b) => b.date))].sort(), [groupBalances]);
+  const shortDates = useMemo(() => new Set(groupBalances.filter((b) => b.buffer < 0).map((b) => b.date)), [groupBalances]);
+
+  const worstDate = useMemo(() => {
+    let best: string | null = null;
+    let min = Infinity;
+    for (const b of groupBalances) if (b.buffer < min) { min = b.buffer; best = b.date; }
+    return best;
+  }, [groupBalances]);
+  const cardDate = pickedDate && groupDates.includes(pickedDate) ? pickedDate : worstDate ?? groupDates[0] ?? null;
+  const cardBalances = SHIFT_FAMILIES.map(
+    (sh) => groupBalances.find((b) => b.date === cardDate && b.shift === sh) ?? { shift: sh, onDuty: 0, demand: 0, pm: 0, cm: 0, acs: 0, buffer: 0, orders: 0, date: cardDate ?? '', pool: 'L5' as const },
+  );
+
+  const groupStats = useMemo(() => {
+    const rows = workOrders.filter((wo) => inGroup(wo, selectedLine));
+    const count = (st: LiveAllocation['status']) => rows.filter((wo) => workload.byWo[wo.id]?.status === st).length;
+    const months = [...new Set(rows.map((wo) => workload.byWo[wo.id]?.date.slice(0, 7)).filter(Boolean))].sort() as string[];
+    const checks = rows.map((wo) => windowCheck(wo, todayIso));
+    return {
+      total: rows.length, ok: count('OK'), short: count('SHORT'), unassigned: count('UNASSIGNED'),
+      noRoster: count('NO_ROSTER'), unplaced: count('UNPLACED'), months,
+      outside: checks.filter((c) => c.outsideWindow).length,
+      pastFinish: checks.filter((c) => c.pastFinish).length,
+      dataProblems: rows.filter((wo) => wo.importWarnings?.length).length,
+      // Window checks need Start No Earlier Than / Finish No Later Than in the data
+      hasWindow: rows.some((wo) => wo.startNoEarlier || wo.finishNoLater),
+    };
+  }, [workOrders, workload, selectedLine, todayIso]);
+
+  const shortDaysFor = (g: LineGroup) =>
+    new Set(combineBalances(GROUP_LINES[g]).filter((b) => b.buffer < 0).map((b) => b.date)).size;
 
   // Counts by line for tabs
   const lineCounts = useMemo(() => {
     const c = { L4: 0, L5: 0, L6: 0 };
     workOrders.forEach((wo) => {
-      const l = normalizeLineCode(wo.line);
-      if (l in c) c[l]++;
+      const l = parseLineCode(wo.line);
+      if (l) c[l]++;
     });
     return c;
   }, [workOrders]);
 
+  const [importing, setImporting] = useState(false);
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const buffer = await file.arrayBuffer();
-      const res = await uploadWorkOrders(buffer);
-      toast(`Successfully imported ${res.count} activities from ${file.name}.`, 'ok');
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    } catch (err: any) {
-      toast(`Failed to parse file: ${err.message}`, 'error');
-    }
+    if (file) await importFile(file);
   };
 
-  const handleAutoAllocate = async () => {
-    setIsAllocating(true);
+  /** Shared by the Import button and the drag-and-drop area. */
+  const importFile = async (file: File) => {
+    if (!/\.xlsx?$/i.test(file.name)) {
+      toast('Please choose an Excel file (.xlsx or .xls).', 'error');
+      return;
+    }
+    setImporting(true);
     try {
-      await allocateResources();
-      toast('Auto-allocated roster staff to scheduled activities.', 'ok');
+      const buffer = await file.arrayBuffer();
+      const res = await uploadWorkOrders(buffer, file.name);
+      const issues = res.fileErrors.length + res.problemRows;
+      toast(
+        issues
+          ? `Imported ${res.rows} work orders from ${file.name}. ${res.fileErrors.length ? `${res.fileErrors.length} missing column${res.fileErrors.length === 1 ? '' : 's'}, ` : ''}${res.problemRows} row${res.problemRows === 1 ? '' : 's'} with problems — see the Import report.`
+          : `Imported ${res.rows} work orders from ${file.name}. All 11 yellow columns found, no row problems.`,
+        issues ? 'info' : 'ok',
+      );
     } catch (err: any) {
-      toast(`Allocation failed: ${err.message}`, 'error');
+      toast(`Could not read ${file.name}: ${err.message}`, 'error');
     } finally {
-      setIsAllocating(false);
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -222,35 +351,56 @@ export function WorkOrdersPage() {
       'Work Order ID',
       'Description',
       'Work Type',
-      'Department',
+      'Div / Depart',
+      'Location',
+      'Asset Group',
+      'Reported Date',
+      'Start No Earlier Than',
+      'Target Start',
       'Scheduled Start',
-      'Scheduled Finish',
+      'Finish No Later Than',
+      'Outside Window',
+      'Past FNLT',
+      'Shift',
       'Resource Required',
       'Allocated Engineers',
       'Status',
       'Reason',
+      ...extraColumns.map((c) => c.excelHeader),
     ];
 
-    const rows = filteredWorkOrders.map((wo) => [
+    const rows = filteredWorkOrders.map((wo) => {
+      const live = workload.byWo[wo.id];
+      return [
       wo.line,
       wo.workOrderId,
-      `"${wo.description.replace(/"/g, '""')}"`,
+      `"${(wo.description ?? '').replace(/"/g, '""')}"`,
       wo.workType,
       wo.department ?? '',
+      `"${(wo.location ?? '').replace(/"/g, '""')}"`,
+      wo.assetGroup ?? '',
+      wo.reportedDate ?? '',
+      wo.startNoEarlier ?? '',
+      wo.targetStart ?? '',
       wo.scheduledStart,
-      wo.scheduledFinish,
-      wo.resourceRequired,
-      `"${(wo.assignedEmployeeNames ?? []).join(', ')}"`,
-      wo.allocationStatus ?? 'UNASSIGNED',
-      `"${wo.conflictReason ?? ''}"`,
-    ]);
+      wo.finishNoLater ?? '',
+      windowCheck(wo, todayIso).outsideWindow ? 'YES' : '',
+      windowCheck(wo, todayIso).pastFinish ? 'YES' : '',
+      live ? SHIFT_LABEL[live.shift] : '',
+      live?.needed ?? wo.resourceRequired,
+      `"${(live?.assignedNames ?? []).join(', ')}"`,
+      live?.status ?? 'UNASSIGNED',
+      `"${(live?.reason ?? '').replace(/"/g, '""')}"`,
+      ...extraColumns.map((c) => `"${(wo.extra?.[c.appField] ?? '').replace(/"/g, '""')}"`),
+    ];
+    });
 
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `Work_Orders_Allocation_${settings.activeYear}_${settings.activeMonth}.csv`;
+    link.download = `Work_Orders_Allocation_${GROUP_LABEL[selectedLine].replace(/\W+/g, '_')}.csv`;
     link.click();
     URL.revokeObjectURL(url);
     toast('Exported allocation audit report as CSV.', 'ok');
@@ -266,25 +416,27 @@ export function WorkOrdersPage() {
       {/* =========================================================================
           TOP COMMAND HEADER (FULL WIDTH)
          ========================================================================= */}
-      <div className="border-b border-[var(--line)] bg-[var(--surface)] px-6 lg:px-10 py-5 sticky top-0 z-20 shadow-sm">
+      <div className="border-b border-[var(--line)] bg-[var(--surface)] px-4 sm:px-6 lg:px-10 py-4 sm:py-5 xl:sticky xl:top-0 z-20 shadow-sm">
         <div className="w-full flex flex-col xl:flex-row xl:items-center justify-between gap-5">
           {/* Title Area */}
           <div className="flex items-center gap-4">
-            <div className="w-13 h-13 rounded-2xl bg-gradient-to-br from-indigo-500/20 via-blue-500/10 to-transparent border border-indigo-500/30 flex items-center justify-center text-indigo-400 shadow-sm shrink-0">
+            <div className="hidden sm:flex w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500/20 via-blue-500/10 to-transparent border border-indigo-500/30 items-center justify-center text-indigo-400 shadow-sm shrink-0">
               <Icons.Clipboard />
             </div>
             <div>
               <div className="flex items-center gap-3 flex-wrap">
-                <h1 className="text-2xl lg:text-[25px] font-black tracking-tight text-ink">
+                <h1 className="text-xl sm:text-2xl lg:text-[25px] font-black tracking-tight text-ink">
                   Work Orders &amp; Manpower Allocation
                 </h1>
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12.5px] font-bold tracking-wide uppercase bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/30">
-                  <span className="w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />
-                  {workOrders.length} Activities Loaded
-                </span>
-                {workloadConflicts.length > 0 ? (
+                {workOrders.length > 0 && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12.5px] font-bold tracking-wide uppercase bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/30">
+                    <span className="w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />
+                    {workOrders.length} Activities Loaded
+                  </span>
+                )}
+                {groupConflicts.length > 0 ? (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12.5px] font-bold bg-red-500/15 text-red-400 border border-red-500/30">
-                    <Icons.AlertTriangle /> {workloadConflicts.length} Deficits Detected
+                    <Icons.AlertTriangle /> {groupConflicts.length} Deficits · {GROUP_LABEL[selectedLine]}
                   </span>
                 ) : workOrders.length > 0 ? (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12.5px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
@@ -293,7 +445,7 @@ export function WorkOrdersPage() {
                 ) : null}
               </div>
               <p className="text-[13.5px] text-ink-2 mt-1">
-                Direct integration between November Work Orders (Lines 4, 5, 6) &amp; ShiftLine Roster staff capacity with real-time shift buffer analytics.
+                Live from the Planner: each work order is checked against its own line&apos;s roster for its date and shift. Edit the roster and these numbers update by themselves.
               </p>
             </div>
           </div>
@@ -307,14 +459,20 @@ export function WorkOrdersPage() {
               accept=".xlsx,.xls"
               className="hidden"
             />
+            {workOrders.length > 0 && (
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
               className="h-11 px-4 rounded-xl text-[13.5px] font-bold border border-[var(--line-strong)] bg-[var(--surface-2)] text-ink hover:bg-[var(--surface-3)] hover:border-[var(--line)] transition-all shadow-sm active:scale-95 inline-flex items-center gap-2"
             >
-              <Icons.Upload />
-              <span>Import Excel (.xlsx)</span>
+              {importing ? (
+                <span className="w-4 h-4 border-2 border-current/30 border-t-current rounded-full animate-spin" />
+              ) : (
+                <Icons.Upload />
+              )}
+              <span>{importing ? 'Importing…' : 'Import Excel (.xlsx)'}</span>
             </button>
+            )}
 
             <button
               type="button"
@@ -326,25 +484,17 @@ export function WorkOrdersPage() {
               <span>Yellow Headings Guide</span>
             </button>
 
-            <button
-              type="button"
-              disabled={isAllocating || workOrders.length === 0}
-              onClick={handleAutoAllocate}
-              className="h-11 px-5 rounded-xl text-[14px] font-extrabold bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white shadow-lg shadow-indigo-500/25 border border-indigo-400/30 transition-all active:scale-95 disabled:opacity-40 disabled:pointer-events-none inline-flex items-center gap-2"
+            {workOrders.length > 0 && (
+            <span
+              className="h-11 px-4 rounded-xl text-[13px] font-bold border border-emerald-500/35 bg-emerald-500/10 text-emerald-400 inline-flex items-center gap-2"
+              title="Allocation is recalculated automatically whenever the Planner roster, people, shift codes or work orders change."
             >
-              {isAllocating ? (
-                <>
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Auto-Allocating Staff...</span>
-                </>
-              ) : (
-                <>
-                  <Icons.Bolt />
-                  <span>Auto-Allocate Roster Staff</span>
-                </>
-              )}
-            </button>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              Live sync with Planner
+            </span>
+            )}
 
+            {workOrders.length > 0 && (
             <button
               type="button"
               onClick={handleExportCSV}
@@ -354,6 +504,7 @@ export function WorkOrdersPage() {
               <Icons.Download />
               <span>Export CSV</span>
             </button>
+            )}
           </div>
         </div>
       </div>
@@ -361,27 +512,77 @@ export function WorkOrdersPage() {
       {/* =========================================================================
           MAIN FULL-WIDTH BODY
          ========================================================================= */}
-      <div className="w-full px-6 lg:px-10 py-6 flex flex-col gap-6">
+      {workOrders.length === 0 ? (
+        <EmptyImport
+          importing={importing}
+          columns={allWorkOrderColumns(extraColumns)}
+          onPick={() => fileInputRef.current?.click()}
+          onDrop={importFile}
+          onGuide={() => setShowYellowGuide(true)}
+        />
+      ) : (
+      <div className="w-full px-3 sm:px-6 lg:px-10 py-4 sm:py-6 flex flex-col gap-5 sm:gap-6">
         {/* =========================================================================
             KPI CARDS: 3 SHIFTS MANPOWER & BUFFER DASHBOARD (EXPANDED & LEGIBLE)
            ========================================================================= */}
         <div>
-          <div className="flex items-center justify-between mb-3 px-1">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-3 px-1">
             <h2 className="text-[14px] font-black text-ink-2 uppercase tracking-wider">
               Shift Manpower Capacity &amp; Net Resource Buffer
             </h2>
             <span className="text-[13px] text-ink-3">
-              Buffer = Available Working Staff − Total Activity Demand
+              Buffer = people on that shift in the Planner − crew needed by that day&apos;s work orders
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {shiftBalances.map((bal) => {
+          {/* Day picker: every date of the selected lines that has work orders */}
+          <div className="mb-4 flex items-center gap-2 overflow-x-auto pb-1">
+            <span className="text-[11.5px] font-black text-ink-3 uppercase tracking-wider shrink-0 mr-1">
+              {GROUP_LABEL[selectedLine]} · Day
+            </span>
+            {groupDates.length === 0 && (
+              <span className="text-[12.5px] text-ink-3">No work orders for these lines yet — import a work-order sheet.</span>
+            )}
+            {groupDates.map((d) => {
+              const active = d === cardDate;
+              const short = shortDates.has(d);
+              const [, mm, dd] = d.split('-');
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setPickedDate(d)}
+                  title={`${weekdayDate(d)}${short ? ' — staff deficit' : ''}`}
+                  className={`relative shrink-0 px-2.5 py-1.5 rounded-lg text-[12px] font-mono font-bold border transition-all ${
+                    active
+                      ? 'bg-[var(--accent)] text-[var(--accent-ink)] border-transparent'
+                      : short
+                      ? 'border-red-500/40 text-red-400 bg-red-500/10 hover:bg-red-500/20'
+                      : 'border-[var(--line)] text-ink-2 bg-[var(--surface-2)] hover:text-ink'
+                  }`}
+                >
+                  {dd}/{mm}
+                  {short && !active && <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500" />}
+                </button>
+              );
+            })}
+          </div>
+          {cardDate && (
+            <p className="mb-3 px-1 text-[13px] text-ink-2">
+              Showing <strong className="text-ink">{weekdayDate(cardDate)}</strong>
+              {pickedDate ? '' : ' (the day with the biggest deficit)'} · {GROUP_LABEL[selectedLine]}
+            </p>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-5">
+            {cardBalances.map((bal) => {
               const isShort = bal.buffer < 0;
-              const isTight = bal.buffer === 0;
-              const loadPercent = bal.availableStaff > 0
-                ? Math.min(100, Math.round((bal.totalAllocated / bal.availableStaff) * 100))
-                : 0;
+              const isTight = bal.buffer === 0 && bal.demand > 0;
+              const loadPercent = bal.onDuty > 0
+                ? Math.round((bal.demand / bal.onDuty) * 100)
+                : bal.demand > 0 ? 100 : 0;
+              const shiftLabel = SHIFT_LABEL[bal.shift];
+              const timing = shiftTiming(codesByLine[lineCodeToId(groupLines[0])], bal.shift);
 
               const isMorning = bal.shift === 'M';
               const isEvening = bal.shift === 'E';
@@ -408,8 +609,8 @@ export function WorkOrdersPage() {
                 >
                   <div>
                     {/* Shift Header */}
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                      <div className="flex items-center gap-3 whitespace-nowrap">
                         <div
                           className="w-11 h-11 rounded-2xl flex items-center justify-center font-bold shadow-inner"
                           style={{ background: accentBg, color: accentColor }}
@@ -418,11 +619,9 @@ export function WorkOrdersPage() {
                         </div>
                         <div>
                           <h3 className="text-[17px] font-black text-ink tracking-tight">
-                            {bal.shiftLabel} Shift
+                            {shiftLabel} Shift
                           </h3>
-                          <span className="text-[12.5px] font-mono text-ink-3">
-                            {isMorning ? '06:00 – 14:00' : isEvening ? '14:00 – 22:00' : '22:00 – 06:00'}
-                          </span>
+                          <span className="text-[12.5px] font-mono text-ink-3">{timing}</span>
                         </div>
                       </div>
 
@@ -462,9 +661,9 @@ export function WorkOrdersPage() {
                         </span>
                         <div className="flex items-baseline gap-2">
                           <span className="text-4xl font-black font-mono text-ink tracking-tight">
-                            {bal.availableStaff}
+                            {bal.onDuty}
                           </span>
-                          <span className="text-[13px] font-medium text-ink-3">engineers</span>
+                          <span className="text-[13px] font-medium text-ink-3">on {shiftLabel.toLowerCase()}</span>
                         </div>
                       </div>
 
@@ -477,9 +676,11 @@ export function WorkOrdersPage() {
                             className="text-4xl font-black font-mono tracking-tight"
                             style={{ color: accentColor }}
                           >
-                            {bal.totalAllocated}
+                            {bal.demand}
                           </span>
-                          <span className="text-[13px] font-medium text-ink-3">assigned</span>
+                          <span className="text-[13px] font-medium text-ink-3">
+                            needed · {bal.orders} order{bal.orders === 1 ? '' : 's'}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -487,7 +688,7 @@ export function WorkOrdersPage() {
                     {/* Progress Utilization Bar */}
                     <div className="mt-3 space-y-1.5">
                       <div className="flex items-center justify-between text-[12.5px] text-ink-2 font-medium">
-                        <span>Workforce Load Capacity</span>
+                        <span>Load (needed ÷ on shift)</span>
                         <span className="font-mono font-bold text-ink">{loadPercent}%</span>
                       </div>
                       <div className="w-full h-2 rounded-full bg-[var(--surface-3)] overflow-hidden">
@@ -506,11 +707,15 @@ export function WorkOrdersPage() {
                   <div className="mt-4 pt-3.5 border-t border-[var(--line)] flex items-center justify-between text-[13px] text-ink-2">
                     <span className="inline-flex items-center gap-1.5">
                       <span className="w-2.5 h-2.5 rounded-full bg-blue-400" />
-                      PM Demand: <strong className="font-mono text-ink font-bold">{bal.pmRequired}</strong>
+                      PM: <strong className="font-mono text-ink font-bold">{bal.pm}</strong>
                     </span>
                     <span className="inline-flex items-center gap-1.5">
                       <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-                      CM Standby: <strong className="font-mono text-ink font-bold">{bal.cmReserve}</strong>
+                      CM: <strong className="font-mono text-ink font-bold">{bal.cm}</strong>
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-indigo-400" />
+                      ACS: <strong className="font-mono text-ink font-bold">{bal.acs}</strong>
                     </span>
                   </div>
                 </div>
@@ -522,7 +727,7 @@ export function WorkOrdersPage() {
         {/* =========================================================================
             INCIDENT / CONFLICT ALERT PANEL
            ========================================================================= */}
-        {workloadConflicts.length > 0 && (
+        {groupConflicts.length > 0 && (
           <div className="rounded-2xl border border-red-500/35 bg-gradient-to-r from-red-500/10 via-red-950/15 to-transparent p-5 shadow-sm">
             <div className="flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-3.5">
@@ -531,10 +736,10 @@ export function WorkOrdersPage() {
                 </div>
                 <div>
                   <h3 className="text-[16px] font-bold text-red-400">
-                    Manpower Resource Shortfalls Detected ({workloadConflicts.length} Alerts)
+                    {groupConflicts.length} work order{groupConflicts.length === 1 ? '' : 's'} not fully staffed · {GROUP_LABEL[selectedLine]}
                   </h3>
                   <p className="text-[13.5px] text-ink-2 mt-0.5">
-                    Certain work orders require more staff than currently available on the active shift.
+                    Fix it in the Planner: put more people on that shift on that day (or move the work order&apos;s shift). This list clears itself as you edit.
                   </p>
                 </div>
               </div>
@@ -549,40 +754,71 @@ export function WorkOrdersPage() {
                 </button>
                 <button
                   type="button"
-                  disabled={isAllocating}
-                  onClick={handleAutoAllocate}
+                  onClick={() => setSelectedStatus('SHORT')}
                   className="h-10 px-4 rounded-xl text-[13px] font-bold bg-red-500 hover:bg-red-600 text-white transition-all shadow-sm active:scale-95"
                 >
-                  Auto-Balance Staff
+                  Show shortfalls in table
                 </button>
               </div>
             </div>
 
             {showConflictsExpanded && (
               <div className="mt-4 pt-4 border-t border-red-500/20 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-72 overflow-y-auto pr-1">
-                {workloadConflicts.map((c, i) => (
-                  <div
-                    key={i}
-                    className="p-3.5 rounded-xl bg-[var(--surface)] border border-red-500/25 flex flex-col justify-between"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono font-bold text-[13px] text-red-400">
-                        WO #{c.woId}
-                      </span>
-                      <span className="text-[11px] font-black uppercase px-2 py-0.5 rounded bg-red-500/15 text-red-400">
-                        DEFICIT
-                      </span>
+                {groupConflicts.map((c) => {
+                  const wo = workOrders.find((w) => w.id === c.woId);
+                  return (
+                    <div
+                      key={c.woId}
+                      className="p-3.5 rounded-xl bg-[var(--surface)] border border-red-500/25 flex flex-col justify-between"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono font-bold text-[13px] text-red-400">WO #{wo?.workOrderId ?? c.woId}</span>
+                        <span className="text-[11px] font-black uppercase px-2 py-0.5 rounded bg-red-500/15 text-red-400">
+                          {c.status === 'NO_ROSTER' ? 'No roster' : c.status === 'UNASSIGNED' ? 'Nobody free' : `Short ${c.needed - c.assignedIds.length}`}
+                        </span>
+                      </div>
+                      <p className="text-[12px] text-ink-3 mt-1.5">
+                        {c.lineCode} · {weekdayDate(c.date)} · {SHIFT_LABEL[c.shift]}
+                      </p>
+                      <p className="text-[12.5px] text-ink-2 my-2 leading-relaxed">{c.reason}</p>
+                      <div className="flex items-center justify-between text-[12px] font-mono text-ink-3 pt-2 border-t border-[var(--line)]">
+                        <span>Needed: <strong className="text-ink font-bold">{c.needed}</strong></span>
+                        <span>Assigned: <strong className="text-red-400 font-bold">{c.assignedIds.length}</strong></span>
+                        <button
+                          type="button"
+                          onClick={() => setPickedDate(c.date)}
+                          className="font-sans font-bold text-[var(--accent)] hover:underline"
+                        >
+                          Show day
+                        </button>
+                        {onOpenPlanner && c.status !== 'NO_ROSTER' && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await openSheet(c.lineId, c.year, c.month);
+                              onOpenPlanner();
+                            }}
+                            title="Open this line & month in the Planner — the shortfall is listed under Insights → Issues with who can cover"
+                            className="font-sans font-bold text-red-400 hover:underline"
+                          >
+                            Fix in Planner →
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <p className="text-[12.5px] text-ink-2 my-2 leading-relaxed">{c.reason}</p>
-                    <div className="flex items-center justify-between text-[12px] font-mono text-ink-3 pt-2 border-t border-[var(--line)]">
-                      <span>Needed: <strong className="text-ink font-bold">{c.needed}</strong></span>
-                      <span>Available: <strong className="text-red-400 font-bold">{c.available}</strong></span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
+        )}
+
+        {/* Import report: what the last Excel import found */}
+        {settings.lastWorkOrderImport && (
+          <ImportReport
+            report={settings.lastWorkOrderImport}
+            rowProblems={workOrders.flatMap((w) => w.importWarnings ?? [])}
+          />
         )}
 
         {/* =========================================================================
@@ -590,59 +826,66 @@ export function WorkOrdersPage() {
            ========================================================================= */}
         <div className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden shadow-sm">
           {/* Top Metric Strip from Client Screen */}
-          <div className="flex items-center gap-6 px-5 py-3 text-[13px] font-medium border-b border-[var(--line)] bg-[var(--surface-2)]/60 text-ink-2 overflow-x-auto">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 px-4 sm:px-5 py-3 text-[13px] font-medium border-b border-[var(--line)] bg-[var(--surface-2)]/60 text-ink-2">
             <span className="whitespace-nowrap">
-              <strong className="text-ink font-bold font-mono text-[14px]">
-                {workOrders.length > 0 ? workOrders.length : 313}
-              </strong>{' '}
-              activities due in November
+              <strong className="text-ink font-bold font-mono text-[14px]">{groupStats.total}</strong> activities ·{' '}
+              {GROUP_LABEL[selectedLine]}
             </span>
-            <span className="whitespace-nowrap">
-              <strong className="text-ink font-bold font-mono text-[14px]">
-                {workOrders.length > 0 ? workOrders.length : 313}
-              </strong>{' '}
-              planned
-            </span>
-            <span className="whitespace-nowrap">
-              <strong className="text-ink font-bold font-mono text-[14px]">140</strong>{' '}
-              already past Finish No Later Than
+            <span className="whitespace-nowrap text-emerald-400">
+              <strong className="font-bold font-mono text-[14px]">{groupStats.ok}</strong> staffed
             </span>
             <span className="whitespace-nowrap text-rose-400 font-semibold">
-              <strong className="font-bold font-mono text-[14px] text-rose-400">140</strong>{' '}
-              planned outside their window
+              <strong className="font-bold font-mono text-[14px]">{groupStats.short}</strong> short
             </span>
-            <span className="ml-auto text-ink-3 text-[12px] font-mono whitespace-nowrap">
-              Crew library: 1115 tasks
+            <span className="whitespace-nowrap text-ink-2">
+              <strong className="text-ink font-bold font-mono text-[14px]">{groupStats.unassigned}</strong> nobody free
+            </span>
+            {groupStats.hasWindow ? (
+              <>
+                <span className="whitespace-nowrap text-rose-400" title="Scheduled Start outside Start No Earlier Than → Finish No Later Than">
+                  <strong className="font-bold font-mono text-[14px]">{groupStats.outside}</strong> planned outside their window
+                </span>
+                <span className="whitespace-nowrap text-orange-400" title="Finish No Later Than is before today">
+                  <strong className="font-bold font-mono text-[14px]">{groupStats.pastFinish}</strong> past Finish No Later Than
+                </span>
+              </>
+            ) : groupStats.total > 0 ? (
+              <span className="whitespace-nowrap text-ink-3" title="These work orders have no Start No Earlier Than / Finish No Later Than dates — they were imported before those columns were read. Import the Excel file again.">
+                Window checks: re-import the Excel file
+              </span>
+            ) : null}
+            {groupStats.unplaced > 0 && (
+              <span className="whitespace-nowrap text-amber-400" title="Listed in the Import report above">
+                <strong className="font-bold font-mono text-[14px]">{groupStats.unplaced}</strong> not placed (no Scheduled Start / Line)
+              </span>
+            )}
+            {groupStats.noRoster > 0 && (
+              <span className="whitespace-nowrap text-amber-400">
+                <strong className="font-bold font-mono text-[14px]">{groupStats.noRoster}</strong> on a line with no people (add them in People)
+              </span>
+            )}
+            <span className="sm:ml-auto text-ink-3 text-[12px] font-mono whitespace-nowrap">
+              {groupStats.months.length
+                ? `Months: ${groupStats.months.map((m) => { const [y, mo] = m.split('-'); return new Date(+y, +mo - 1, 1).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }); }).join(', ')}`
+                : 'No work orders loaded'}
             </span>
           </div>
 
           {/* Line Group Selector Buttons: Line 4 & 6 in one, Line 5 in one */}
-          <div className="p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="p-3 sm:p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-3 sm:gap-4">
             <div className="flex items-center gap-2.5 overflow-x-auto">
               {[
-                {
-                  id: 'L4_L6',
-                  label: 'Line 4 & 6',
-                  shortDays: '30 short days',
-                  count: lineCounts.L4 + lineCounts.L6,
-                },
-                {
-                  id: 'L5',
-                  label: 'Line 5',
-                  shortDays: '30 short days',
-                  count: lineCounts.L5,
-                },
-                {
-                  id: 'ALL',
-                  label: 'All Lines',
-                  shortDays: '30 short days',
-                  count: workOrders.length,
-                },
-              ].map((l) => (
+                { id: 'L4_L6' as const, count: lineCounts.L4 + lineCounts.L6 },
+                { id: 'L5' as const, count: lineCounts.L5 },
+                { id: 'ALL' as const, count: workOrders.length },
+              ].map((l) => ({ ...l, label: GROUP_LABEL[l.id], shortDays: shortDaysFor(l.id) })).map((l) => (
                 <button
                   key={l.id}
                   type="button"
-                  onClick={() => setSelectedLine(l.id)}
+                  onClick={() => {
+                    setSelectedLine(l.id);
+                    setPickedDate(null);
+                  }}
                   className={`inline-flex items-center gap-2.5 px-4 py-2 rounded-xl text-[13.5px] font-bold transition-all whitespace-nowrap border ${
                     selectedLine === l.id
                       ? 'bg-[var(--surface-3)] text-ink border-indigo-500 shadow-sm ring-1 ring-indigo-500/40'
@@ -650,8 +893,8 @@ export function WorkOrdersPage() {
                   }`}
                 >
                   <span>{l.label}</span>
-                  <span className="text-rose-400 font-semibold text-[12px]">
-                    {l.shortDays}
+                  <span className={`font-semibold text-[12px] ${l.shortDays ? 'text-rose-400' : 'text-emerald-400'}`}>
+                    {l.shortDays ? `${l.shortDays} short day${l.shortDays === 1 ? '' : 's'}` : 'no short days'}
                   </span>
                   <span className="px-1.5 py-0.5 rounded text-[10.5px] font-mono font-bold bg-[var(--surface-3)] text-ink-3 border border-[var(--line)]">
                     {l.count}
@@ -661,7 +904,7 @@ export function WorkOrdersPage() {
             </div>
 
             {/* Live Search Input */}
-            <div className="relative w-full lg:w-96">
+            <div className="relative w-full xl:w-96">
               <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
                 <Icons.Search />
               </div>
@@ -686,9 +929,9 @@ export function WorkOrdersPage() {
 
           {/* Bottom Row: Type, Shift, and Status Filters */}
           <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-[var(--line)]">
-            <div className="flex flex-wrap items-center gap-4">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0 max-w-full">
               {/* Work Type Filter */}
-              <div className="flex items-center gap-1.5 bg-[var(--surface-2)] p-1.5 rounded-xl border border-[var(--line)]">
+              <div className="flex max-w-full items-center gap-1.5 overflow-x-auto bg-[var(--surface-2)] p-1.5 rounded-xl border border-[var(--line)]">
                 <span className="text-[11px] font-black text-ink-3 uppercase px-2">Type</span>
                 {[
                   { id: 'ALL', label: 'All' },
@@ -700,7 +943,7 @@ export function WorkOrdersPage() {
                     key={t.id}
                     type="button"
                     onClick={() => setSelectedType(t.id)}
-                    className={`px-3 py-1 rounded-lg text-[12.5px] font-bold transition-all ${
+                    className={`shrink-0 whitespace-nowrap px-3 py-1 rounded-lg text-[12.5px] font-bold transition-all ${
                       selectedType === t.id
                         ? 'bg-[var(--surface)] text-ink shadow-sm'
                         : 'text-ink-3 hover:text-ink'
@@ -712,7 +955,7 @@ export function WorkOrdersPage() {
               </div>
 
               {/* Shift Filter */}
-              <div className="flex items-center gap-1.5 bg-[var(--surface-2)] p-1.5 rounded-xl border border-[var(--line)]">
+              <div className="flex max-w-full items-center gap-1.5 overflow-x-auto bg-[var(--surface-2)] p-1.5 rounded-xl border border-[var(--line)]">
                 <span className="text-[11px] font-black text-ink-3 uppercase px-2">Shift</span>
                 {[
                   { id: 'ALL', label: 'All Shifts' },
@@ -724,7 +967,7 @@ export function WorkOrdersPage() {
                     key={s.id}
                     type="button"
                     onClick={() => setSelectedShift(s.id)}
-                    className={`px-3 py-1 rounded-lg text-[12.5px] font-bold transition-all ${
+                    className={`shrink-0 whitespace-nowrap px-3 py-1 rounded-lg text-[12.5px] font-bold transition-all ${
                       selectedShift === s.id
                         ? 'bg-[var(--surface)] text-ink shadow-sm'
                         : 'text-ink-3 hover:text-ink'
@@ -736,25 +979,29 @@ export function WorkOrdersPage() {
               </div>
 
               {/* Status Filter */}
-              <div className="flex items-center gap-1.5 bg-[var(--surface-2)] p-1.5 rounded-xl border border-[var(--line)]">
-                <span className="text-[11px] font-black text-ink-3 uppercase px-2">Status</span>
+              <div className="flex max-w-full items-center gap-1.5 overflow-x-auto bg-[var(--surface-2)] p-1.5 rounded-xl border border-[var(--line)]">
+                <span className="shrink-0 text-[11px] font-black text-ink-3 uppercase px-2">Status</span>
                 {[
-                  { id: 'ALL', label: 'All' },
-                  { id: 'OK', label: '✓ Staffed' },
-                  { id: 'SHORT', label: '🚨 Shortfall' },
-                  { id: 'UNASSIGNED', label: '○ Unassigned' },
+                  { id: 'ALL', label: 'All', dot: '', hint: 'Every work order' },
+                  { id: 'OK', label: 'Staffed', dot: 'bg-emerald-400', hint: 'Enough people on that shift that day' },
+                  { id: 'SHORT', label: 'Shortfall', dot: 'bg-red-400', hint: 'Some people assigned, but fewer than needed' },
+                  { id: 'UNASSIGNED', label: 'Unassigned', dot: 'bg-gray-400', hint: 'Nobody free on that shift, or no people set up for the line' },
                 ].map((st) => (
                   <button
                     key={st.id}
                     type="button"
+                    title={st.hint}
                     onClick={() => setSelectedStatus(st.id)}
-                    className={`px-3 py-1 rounded-lg text-[12.5px] font-bold transition-all ${
+                    className={`shrink-0 whitespace-nowrap px-3 py-1 rounded-lg text-[12.5px] font-bold transition-all ${
                       selectedStatus === st.id
                         ? 'bg-[var(--surface)] text-ink shadow-sm'
                         : 'text-ink-3 hover:text-ink'
                     }`}
                   >
-                    {st.label}
+                    <span className="inline-flex items-center gap-1.5">
+                      {st.dot && <span className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />}
+                      {st.label}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -781,7 +1028,101 @@ export function WorkOrdersPage() {
         {/* =========================================================================
             ENTERPRISE FULL-WIDTH DATA TABLE
            ========================================================================= */}
-        <div className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden shadow-sm">
+        {/* Phones: one card per work order (the table needs too much width) */}
+        <div className="md:hidden flex flex-col gap-3">
+          {filteredWorkOrders.length === 0 && (
+            <div className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 text-center text-[13px] text-ink-3">
+              No activities match your filters.
+            </div>
+          )}
+          {filteredWorkOrders.map((wo) => {
+            const live = workload.byWo[wo.id];
+            const w = windowCheck(wo, todayIso);
+            const needed = live?.needed ?? (wo.resourceRequired || 1);
+            const status = live?.status;
+            const pill =
+              status === 'OK'
+                ? ['Staffed', 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30']
+                : status === 'SHORT'
+                ? ['Shortfall', 'bg-red-500/15 text-red-400 border-red-500/30']
+                : status === 'UNPLACED'
+                ? ['Not placed', 'bg-amber-500/15 text-amber-400 border-amber-500/30']
+                : status === 'NO_ROSTER'
+                ? ['No roster', 'bg-[var(--surface-3)] text-ink-3 border-[var(--line)]']
+                : ['Nobody free', 'bg-[var(--surface-3)] text-ink-3 border-[var(--line)]'];
+            return (
+              <div key={wo.id} className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-3.5 shadow-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono font-bold">
+                      <span className="text-ink text-[13px]">{wo.workOrderId}</span>
+                      {wo.line && <span className="px-1.5 py-0.5 rounded bg-[var(--surface-3)] text-ink-2 border border-[var(--line)]">{wo.line}</span>}
+                      <span className="px-1.5 py-0.5 rounded bg-[var(--surface-3)] text-ink-2 border border-[var(--line)]">{wo.workType}</span>
+                      {wo.assetGroup && <span className="px-1.5 py-0.5 rounded bg-[var(--surface-3)] text-ink-3 border border-[var(--line)]">{wo.assetGroup}</span>}
+                    </div>
+                    <p className="mt-1 text-[13px] font-semibold text-ink leading-snug">{wo.description || 'No description'}</p>
+                    {extraChips(wo).length > 0 && <div className="mt-1 flex flex-wrap gap-1">{extraChips(wo)}</div>}
+                  </div>
+                  <span className={`shrink-0 px-2 py-0.5 rounded-full text-[11px] font-bold border ${pill[1]}`}>
+                    {pill[0]}
+                    {status === 'OK' || status === 'SHORT' ? ` ${live?.assignedIds.length}/${needed}` : ''}
+                  </span>
+                </div>
+
+                <div className="mt-2 text-[12px] text-ink-2">
+                  {wo.scheduledStart ? formatDisplayDate(wo.scheduledStart) : 'No Scheduled Start'}
+                  {live && live.status !== 'UNPLACED' && <> · {SHIFT_LABEL[live.shift]} · {live.onShift} on shift</>}
+                </div>
+                {(w.outsideWindow || w.pastFinish) && (
+                  <div className="mt-1 flex flex-wrap gap-1 text-[10.5px] font-bold">
+                    {w.outsideWindow && <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400">Outside window</span>}
+                    {w.pastFinish && <span className="px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-400">Past FNLT</span>}
+                  </div>
+                )}
+                {live?.reason && <p className="mt-1.5 text-[12px] text-red-400">{live.reason}</p>}
+                {wo.importWarnings?.length ? <p className="mt-1 text-[12px] text-amber-400">⚠ {wo.importWarnings.join(' · ')}</p> : null}
+                {live && live.assignedNames.length > 0 && (
+                  <p className="mt-1.5 text-[12px] text-ink-2">
+                    <span className="text-ink-3">Crew:</span> {live.assignedNames.join(', ')}
+                  </p>
+                )}
+
+                <div className="mt-3 flex items-center justify-between gap-2 border-t border-[var(--line)] pt-2.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-ink-3">Crew</span>
+                    <button
+                      type="button"
+                      disabled={needed <= 1}
+                      onClick={() => saveWorkOrder({ ...wo, resourceRequired: needed - 1, crewSource: 'manual' })}
+                      className="w-7 h-7 rounded-lg border border-[var(--line-strong)] bg-[var(--surface-3)] font-bold disabled:opacity-30"
+                      aria-label="Decrease required crew"
+                    >
+                      −
+                    </button>
+                    <span className="w-5 text-center font-mono font-black text-[13px]">{needed}</span>
+                    <button
+                      type="button"
+                      onClick={() => saveWorkOrder({ ...wo, resourceRequired: needed + 1, crewSource: 'manual' })}
+                      className="w-7 h-7 rounded-lg border border-[var(--line-strong)] bg-[var(--surface-3)] font-bold"
+                      aria-label="Increase required crew"
+                    >
+                      +
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditingWo(wo)}
+                    className="px-3 py-1.5 rounded-lg text-[12.5px] font-bold text-[var(--accent)] border border-[var(--accent)]/30"
+                  >
+                    Manage Crew
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="hidden md:block rounded-2xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-[13.5px]">
               <thead>
@@ -799,10 +1140,12 @@ export function WorkOrdersPage() {
               </thead>
               <tbody className="divide-y divide-[var(--line)]">
                 {filteredWorkOrders.map((wo) => {
-                  const isShort = wo.allocationStatus === 'SHORT';
-                  const isOk = wo.allocationStatus === 'OK';
-                  const assignedCount = wo.assignedEmployeeNames?.length || 0;
-                  const neededCount = wo.resourceRequired || 1;
+                  const live = workload.byWo[wo.id];
+                  const isShort = live?.status === 'SHORT';
+                  const isOk = live?.status === 'OK';
+                  const assignedNames = live?.assignedNames ?? [];
+                  const assignedCount = assignedNames.length;
+                  const neededCount = live?.needed ?? (wo.resourceRequired || 1);
 
                   return (
                     <tr
@@ -824,22 +1167,31 @@ export function WorkOrdersPage() {
                       {/* 2. Description (with Department tag) */}
                       <td className="py-4 px-5 max-w-md">
                         <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          {wo.department && (
-                            <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-[var(--surface-3)] text-ink-3 border border-[var(--line)]">
-                              {wo.department}
+                          {[wo.department, wo.assetGroup].filter(Boolean).map((t) => (
+                            <span key={t} className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-[var(--surface-3)] text-ink-3 border border-[var(--line)]">
+                              {t}
                             </span>
-                          )}
+                          ))}
                           <span
                             className="text-ink font-semibold text-[13.5px] leading-snug line-clamp-2"
                             title={wo.description}
                           >
-                            {wo.description}
+                            {wo.description || <em className="text-ink-3">No description</em>}
                           </span>
                         </div>
-                        {wo.conflictReason && (
+                        {wo.location && (
+                          <div className="text-[11.5px] font-mono text-ink-3" title="Location">📍 {wo.location}</div>
+                        )}
+                        {extraChips(wo).length > 0 && <div className="mt-1 flex flex-wrap gap-1">{extraChips(wo)}</div>}
+                        {live?.reason && (
                           <div className="text-[12px] text-red-400 mt-1 flex items-center gap-1 font-medium">
                             <Icons.AlertTriangle />
-                            <span>{wo.conflictReason}</span>
+                            <span>{live.reason}</span>
+                          </div>
+                        )}
+                        {wo.importWarnings && wo.importWarnings.length > 0 && (
+                          <div className="text-[12px] text-amber-400 mt-1 font-medium" title={wo.importWarnings.join('\n')}>
+                            ⚠ {wo.importWarnings.join(' · ')}
                           </div>
                         )}
                       </td>
@@ -876,12 +1228,41 @@ export function WorkOrdersPage() {
 
                       {/* 5. Scheduled Date (Clean formatted dates) */}
                       <td className="py-4 px-5 font-mono text-[12px] text-ink-2 whitespace-nowrap">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5" title="Scheduled Start — the day this is placed on the Planner">
                           <Icons.Calendar />
-                          <span className="font-semibold text-ink">{formatDisplayDate(wo.scheduledStart)}</span>
-                          <span className="text-ink-3">→</span>
-                          <span className="font-semibold text-ink">{formatDisplayDate(wo.scheduledFinish)}</span>
+                          <span className="font-semibold text-ink">
+                            {wo.scheduledStart ? formatDisplayDate(wo.scheduledStart) : 'No Scheduled Start'}
+                          </span>
                         </div>
+                        {(wo.startNoEarlier || wo.finishNoLater) && (
+                          <div className="mt-1 text-[11px] text-ink-3" title="Allowed window: Start No Earlier Than → Finish No Later Than">
+                            Window {wo.startNoEarlier ? formatDisplayDate(wo.startNoEarlier) : '…'} → {wo.finishNoLater ? formatDisplayDate(wo.finishNoLater) : '…'}
+                          </div>
+                        )}
+                        {(() => {
+                          const w = windowCheck(wo, todayIso);
+                          return (
+                            <div className="mt-1 flex flex-wrap gap-1 font-sans text-[10.5px] font-bold">
+                              {w.outsideWindow && <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30">Outside window</span>}
+                              {w.pastFinish && <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">Past FNLT</span>}
+                              {w.slipDays !== null && w.slipDays !== 0 && (
+                                <span className="px-1.5 py-0.5 rounded bg-[var(--surface-3)] text-ink-3 border border-[var(--line)]" title="Scheduled Start vs Target Start">
+                                  Target {w.slipDays > 0 ? `+${w.slipDays}` : w.slipDays}d
+                                </span>
+                              )}
+                              {w.ageDays !== null && (
+                                <span className="px-1.5 py-0.5 rounded bg-[var(--surface-3)] text-ink-3 border border-[var(--line)]" title="Days since Reported Date">
+                                  Age {w.ageDays}d
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+                        {live && live.status !== 'UNPLACED' && (
+                          <div className="mt-1 text-[11.5px] font-sans font-semibold text-ink-3">
+                            {SHIFT_LABEL[live.shift]} · {live.onShift} on shift in Planner
+                          </div>
+                        )}
                       </td>
 
                       {/* 6. Required People (Editable with steppers) */}
@@ -891,26 +1272,26 @@ export function WorkOrdersPage() {
                             type="button"
                             onClick={async (e) => {
                               e.stopPropagation();
-                              const current = wo.resourceRequired || 1;
+                              const current = neededCount;
                               if (current <= 1) return;
-                              await saveWorkOrder({ ...wo, resourceRequired: current - 1 });
+                              await saveWorkOrder({ ...wo, resourceRequired: current - 1, crewSource: 'manual' });
                               toast(`Updated ${wo.workOrderId} required crew: ${current - 1}`, 'ok');
                             }}
-                            disabled={(wo.resourceRequired || 1) <= 1}
+                            disabled={neededCount <= 1}
                             className="w-6 h-6 rounded-lg border border-[var(--line-strong)] bg-[var(--surface-3)] text-ink hover:border-[var(--accent)] disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center font-bold text-xs transition-colors"
                             title="Decrease required crew"
                           >
                             -
                           </button>
                           <span className="w-6 text-center font-mono font-black text-[13px] text-ink select-none">
-                            {wo.resourceRequired || 1}
+                            {neededCount}
                           </span>
                           <button
                             type="button"
                             onClick={async (e) => {
                               e.stopPropagation();
-                              const current = wo.resourceRequired || 1;
-                              await saveWorkOrder({ ...wo, resourceRequired: current + 1 });
+                              const current = neededCount;
+                              await saveWorkOrder({ ...wo, resourceRequired: current + 1, crewSource: 'manual' });
                               toast(`Updated ${wo.workOrderId} required crew: ${current + 1}`, 'ok');
                             }}
                             className="w-6 h-6 rounded-lg border border-[var(--line-strong)] bg-[var(--surface-3)] text-ink hover:border-[var(--accent)] flex items-center justify-center font-bold text-xs transition-colors"
@@ -919,10 +1300,31 @@ export function WorkOrdersPage() {
                             +
                           </button>
                         </div>
+                        <div className="mt-1 text-[10.5px] font-semibold">
+                          {live?.crewFromStandard ? (
+                            <span className="text-ink-3" title="Crew size from Setup → Work Order Resource Standards (this line, type and shift)">
+                              Setup standard
+                            </span>
+                          ) : wo.crewSource === 'manual' ? (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await saveWorkOrder({ ...wo, resourceRequired: 0, crewSource: 'standard' });
+                                toast(`${wo.workOrderId} now uses the Setup standard crew.`, 'ok');
+                              }}
+                              className="text-[var(--accent)] hover:underline"
+                              title="Go back to the crew size from Setup → Work Order Resource Standards"
+                            >
+                              ↺ Use standard
+                            </button>
+                          ) : (
+                            <span className="text-ink-3">From file</span>
+                          )}
+                        </div>
                       </td>
 
                       {/* 7. Status */}
-                      <td className="py-4 px-5 text-center whitespace-nowrap">
+                      <td className="py-4 px-5 text-center whitespace-nowrap" title={live?.reason ?? ''}>
                         <span
                           className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-bold ${
                             isOk
@@ -945,7 +1347,9 @@ export function WorkOrdersPage() {
                           ) : (
                             <>
                               <span className="w-2 h-2 rounded-full bg-gray-400" />
-                              <span>Unassigned (0/{neededCount})</span>
+                              <span>
+                                {live?.status === 'UNPLACED' ? 'Not placed' : live?.status === 'NO_ROSTER' ? 'No roster' : `Nobody free (0/${neededCount})`}
+                              </span>
                             </>
                           )}
                         </span>
@@ -953,9 +1357,14 @@ export function WorkOrdersPage() {
 
                       {/* 8. Allocated Staff */}
                       <td className="py-4 px-5 max-w-xs">
-                        {wo.assignedEmployeeNames && wo.assignedEmployeeNames.length > 0 ? (
+                        {assignedCount > 0 ? (
                           <div className="flex flex-wrap gap-1.5">
-                            {wo.assignedEmployeeNames.map((name, i) => {
+                            {live?.manual && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase bg-amber-500/15 text-amber-400 border border-amber-500/30" title="Crew picked by hand in Manage Crew">
+                                Manual
+                              </span>
+                            )}
+                            {assignedNames.map((name, i) => {
                               const initials = name
                                 .split(' ')
                                 .map((n) => n[0])
@@ -1027,6 +1436,7 @@ export function WorkOrdersPage() {
           </div>
         </div>
       </div>
+      )}
 
       {/* =========================================================================
           CREW ASSIGNMENT MODAL (EXPANDED & SPACIOUS)
@@ -1034,6 +1444,9 @@ export function WorkOrdersPage() {
       {editingWo && (
         <CrewAssignmentModal
           wo={editingWo}
+          live={workload.byWo[editingWo.id]}
+          staffForShift={staffForShift}
+          codes={codesByLine[lineCodeToId(normalizeLineCode(editingWo.line))]}
           allEmployees={allEmployees}
           onClose={() => setEditingWo(null)}
           onSave={async (updated) => {
@@ -1049,6 +1462,7 @@ export function WorkOrdersPage() {
          ========================================================================= */}
       {showYellowGuide && (
         <YellowColumnsModal
+          columns={allWorkOrderColumns(extraColumns)}
           isOpen={showYellowGuide}
           onClose={() => setShowYellowGuide(false)}
         />
@@ -1062,61 +1476,79 @@ export function WorkOrdersPage() {
  */
 function CrewAssignmentModal({
   wo,
+  live,
+  staffForShift,
+  codes,
   allEmployees,
   onClose,
   onSave,
 }: {
   wo: WorkOrder;
+  live: LiveAllocation | undefined;
+  staffForShift: (lineId: string, isoDate: string, shift: ShiftFamily) => Employee[];
+  codes: ShiftCode[] | undefined;
   allEmployees: Employee[];
   onClose: () => void;
   onSave: (wo: WorkOrder) => Promise<void>;
 }) {
-  const [draft, setDraft] = useState<WorkOrder>({ ...wo });
-  const lineId = lineCodeToId(draft.line);
+  const [draft, setDraft] = useState<WorkOrder>({
+    ...wo,
+    plannedShift: wo.plannedShift ?? workOrderShift(wo),
+    resourceRequired: live?.needed ?? (wo.resourceRequired || 1),
+    // keep the crew size's source unless the crew stepper below is used
+    crewSource: wo.crewSource ?? (usesStandardCrew(wo) ? 'standard' : 'file'),
+    // Start from what the live allocation currently gives this order
+    assignedEmployeeIds: wo.crewMode === 'manual' ? wo.assignedEmployeeIds ?? [] : live?.assignedIds ?? [],
+  });
+  const lineId = lineCodeToId(normalizeLineCode(draft.line));
+  const shift = (draft.plannedShift ?? 'M') as ShiftFamily;
+  const isoDate = parseDateToIso(draft.scheduledStart);
 
-  // Filter available employees for this line
-  const eligibleEmployees = useMemo(() => {
-    return allEmployees.filter((e) => e.lineId === lineId && e.active !== false);
-  }, [allEmployees, lineId]);
+  // Only people the Planner has on this shift on this day can be picked
+  const onShift = useMemo(() => staffForShift(lineId, isoDate, shift), [staffForShift, lineId, isoDate, shift]);
+  const onShiftIds = new Set(onShift.map((e) => e.id));
+  const lineStaff = useMemo(
+    // Line 4 & 6 share one team: offer people from both lines
+    () => allEmployees.filter((e) => POOL_LINES[poolOfLineId(lineId)].ids.includes(e.lineId) && e.active !== false),
+    [allEmployees, lineId],
+  );
+  const eligibleEmployees = [...onShift, ...lineStaff.filter((e) => !onShiftIds.has(e.id))];
 
-  const assignedIds = new Set(draft.assignedEmployeeIds || []);
+  const assignedIds = new Set((draft.assignedEmployeeIds || []).filter((id) => onShiftIds.has(id)));
 
   const toggleEmployee = (emp: Employee) => {
-    const nextIds = new Set(assignedIds);
-    const nextNames = [...(draft.assignedEmployeeNames || [])];
-
-    if (nextIds.has(emp.id)) {
-      nextIds.delete(emp.id);
-      const nameIdx = nextNames.indexOf(emp.name);
-      if (nameIdx >= 0) nextNames.splice(nameIdx, 1);
-    } else {
-      nextIds.add(emp.id);
-      if (!nextNames.includes(emp.name)) nextNames.push(emp.name);
-    }
-
-    const updatedIds = Array.from(nextIds);
-    const isSufficient = updatedIds.length >= draft.resourceRequired;
-
-    setDraft({
-      ...draft,
-      assignedEmployeeIds: updatedIds,
-      assignedEmployeeNames: nextNames,
-      allocationStatus: isSufficient ? 'OK' : updatedIds.length > 0 ? 'SHORT' : 'UNASSIGNED',
-      conflictReason: isSufficient ? undefined : `Requires ${draft.resourceRequired} staff, only ${updatedIds.length} assigned.`,
-    });
+    if (!onShiftIds.has(emp.id)) return;
+    const next = new Set(assignedIds);
+    if (next.has(emp.id)) next.delete(emp.id);
+    else next.add(emp.id);
+    setDraft({ ...draft, assignedEmployeeIds: [...next] });
   };
 
   const handleAutoFill = () => {
-    const needed = draft.resourceRequired;
-    const picked = eligibleEmployees.slice(0, needed);
-    setDraft({
+    setDraft({ ...draft, assignedEmployeeIds: onShift.slice(0, draft.resourceRequired).map((e) => e.id) });
+  };
+
+  const saveManual = () => {
+    const ids = [...assignedIds];
+    return onSave({
       ...draft,
-      assignedEmployeeIds: picked.map((e) => e.id),
-      assignedEmployeeNames: picked.map((e) => e.name),
-      allocationStatus: 'OK',
+      crewMode: 'manual',
+      assignedEmployeeIds: ids,
+      assignedEmployeeNames: ids.map((id) => lineStaff.find((e) => e.id === id)?.name ?? id),
+      allocationStatus: undefined,
       conflictReason: undefined,
     });
   };
+
+  const saveAutomatic = () =>
+    onSave({
+      ...draft,
+      crewMode: 'auto',
+      assignedEmployeeIds: [],
+      assignedEmployeeNames: [],
+      allocationStatus: undefined,
+      conflictReason: undefined,
+    });
 
   return (
     <Modal
@@ -1128,11 +1560,11 @@ function CrewAssignmentModal({
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            onClick={() => onSave(draft)}
-          >
-            Confirm &amp; Save Crew
+          <Button onClick={saveAutomatic} title="Let the live allocation pick the crew from the roster">
+            Use automatic crew
+          </Button>
+          <Button variant="primary" onClick={saveManual}>
+            Save hand-picked crew
           </Button>
         </>
       }
@@ -1150,7 +1582,7 @@ function CrewAssignmentModal({
           </div>
           <div>
             <span className="text-[11px] font-bold text-ink-3 uppercase block">Execution Window</span>
-            <span className="font-mono text-ink text-[12px] block">{draft.scheduledStart}</span>
+            <span className="font-mono text-ink text-[12px] block">{weekdayDate(isoDate)}</span>
           </div>
           <div>
             <span className="text-[11px] font-bold text-ink-3 uppercase block">Demand Target</span>
@@ -1170,7 +1602,7 @@ function CrewAssignmentModal({
               <button
                 type="button"
                 onClick={() =>
-                  setDraft({ ...draft, resourceRequired: Math.max(1, draft.resourceRequired - 1) })
+                  setDraft({ ...draft, resourceRequired: Math.max(1, draft.resourceRequired - 1), crewSource: 'manual' })
                 }
                 className="w-10 h-10 rounded-xl border border-[var(--line)] bg-[var(--surface-2)] font-bold text-ink hover:bg-[var(--surface-3)] text-lg"
               >
@@ -1182,13 +1614,13 @@ function CrewAssignmentModal({
                 max={12}
                 value={draft.resourceRequired}
                 onChange={(e) =>
-                  setDraft({ ...draft, resourceRequired: Math.max(1, parseInt(e.target.value, 10) || 1) })
+                  setDraft({ ...draft, resourceRequired: Math.max(1, parseInt(e.target.value, 10) || 1), crewSource: 'manual' })
                 }
                 className="w-24 h-10 text-center font-mono font-black text-lg bg-[var(--surface)] border border-[var(--line)] rounded-xl text-ink"
               />
               <button
                 type="button"
-                onClick={() => setDraft({ ...draft, resourceRequired: draft.resourceRequired + 1 })}
+                onClick={() => setDraft({ ...draft, resourceRequired: draft.resourceRequired + 1, crewSource: 'manual' })}
                 className="w-10 h-10 rounded-xl border border-[var(--line)] bg-[var(--surface-2)] font-bold text-ink hover:bg-[var(--surface-3)] text-lg"
               >
                 +
@@ -1202,11 +1634,13 @@ function CrewAssignmentModal({
             </label>
             <Select
               value={draft.plannedShift || 'M'}
-              onChange={(e) => setDraft({ ...draft, plannedShift: e.target.value as any })}
+              onChange={(e) => setDraft({ ...draft, plannedShift: e.target.value as ShiftFamily })}
             >
-              <option value="M">Morning Shift (06:00 – 14:00)</option>
-              <option value="E">Evening Shift (14:00 – 22:00)</option>
-              <option value="N">Night Shift (22:00 – 06:00)</option>
+              {SHIFT_FAMILIES.map((f) => (
+                <option key={f} value={f}>
+                  {SHIFT_LABEL[f]} Shift {shiftTiming(codes, f) ? `(${shiftTiming(codes, f)})` : ''}
+                </option>
+              ))}
             </Select>
           </div>
         </div>
@@ -1215,7 +1649,9 @@ function CrewAssignmentModal({
         <div className="mt-1">
           <div className="flex items-center justify-between mb-2.5">
             <span className="text-[13px] font-bold text-ink flex items-center gap-2">
-              <span>Select Engineers for this Activity:</span>
+              <span>
+                On {SHIFT_LABEL[shift]} that day in the Planner: {onShift.length}
+              </span>
               <span className="font-mono text-[12px] text-[var(--accent)] font-bold">
                 ({assignedIds.size} of {draft.resourceRequired} selected)
               </span>
@@ -1225,13 +1661,14 @@ function CrewAssignmentModal({
               onClick={handleAutoFill}
               className="text-[12.5px] font-bold text-[var(--accent)] hover:underline"
             >
-              Auto-Select First {draft.resourceRequired}
+              Pick first {Math.min(draft.resourceRequired, onShift.length)} on shift
             </button>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-64 overflow-y-auto pr-1">
             {eligibleEmployees.map((emp) => {
               const isSelected = assignedIds.has(emp.id);
+              const available = onShiftIds.has(emp.id);
               const initials = emp.name
                 .split(' ')
                 .map((n) => n[0])
@@ -1243,7 +1680,9 @@ function CrewAssignmentModal({
                   key={emp.id}
                   type="button"
                   onClick={() => toggleEmployee(emp)}
-                  className={`flex items-center gap-3 p-3 rounded-xl border text-left transition-all ${
+                  disabled={!available}
+                  title={available ? '' : `Not on ${SHIFT_LABEL[shift]} on this day in the Planner`}
+                  className={`flex items-center gap-3 p-3 rounded-xl border text-left transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
                     isSelected
                       ? 'bg-[var(--accent)]/20 border-[var(--accent)] text-ink shadow-sm'
                       : 'bg-[var(--surface-2)]/70 border-[var(--line)] text-ink-2 hover:bg-[var(--surface-2)] hover:text-ink'
@@ -1261,7 +1700,7 @@ function CrewAssignmentModal({
                   <div className="flex-1 min-w-0">
                     <div className="text-[13.5px] font-bold truncate text-ink">{emp.name}</div>
                     <div className="text-[11.5px] text-ink-3 flex items-center gap-1.5 mt-0.5">
-                      <span>Shift: {emp.defaultShift}</span>
+                      <span>{available ? `On ${SHIFT_LABEL[shift]} this day` : 'Off / other shift this day'}</span>
                       {emp.isLeader && (
                         <span className="px-1.5 py-0.2 rounded bg-amber-500/25 text-amber-400 font-black text-[10px]">
                           LEADER
@@ -1290,144 +1729,266 @@ function CrewAssignmentModal({
  * Mandatory Yellow Columns Guide Modal
  */
 function YellowColumnsModal({
+  columns,
   isOpen,
   onClose,
 }: {
+  columns: WorkOrderColumn[];
   isOpen: boolean;
   onClose: () => void;
 }) {
   if (!isOpen) return null;
-
-  const yellowColumns = [
-    {
-      col: 'Col A',
-      header: 'Work Order',
-      type: 'Alphanumeric / ID',
-      role: 'Primary Audit Key & Task Identifier',
-      description: 'Unique enterprise tracking ID for the maintenance order. Every technician dispatch, conflict alert, and compliance record links to this primary key.',
-      example: '13387025, 13445509',
-    },
-    {
-      col: 'Col D',
-      header: 'Location',
-      type: 'Track / Room Code',
-      role: 'Physical Worksite & Line Assignment',
-      description: 'Exact station, mainline track section, or equipment room. Ensures technicians are dispatched to the correct geographic location and line.',
-      example: 'L5-MV-015, L4-DP-OTS-E1000',
-    },
-    {
-      col: 'Col E',
-      header: 'Resource Required',
-      type: 'Headcount (1–8)',
-      role: 'Labor Demand from Shift',
-      description: 'The number of technicians required for the activity. Subtracted from available staff to calculate the Net Shift Buffer. Defaults: PM=2, CM=2, ACS=1.',
-      example: '2 technicians (editable with [-] [+])',
-    },
-    {
-      col: 'Col J',
-      header: 'Start No Earlier',
-      type: 'Timestamp (M/D/YY H:MM)',
-      role: 'Contractual Earliest Start Window',
-      description: 'Earliest allowable start date/time. Prevents teams from starting work prematurely while tracks are in revenue operation or before parts arrive.',
-      example: '9/24/26 8:00 AM',
-    },
-    {
-      col: 'Col N',
-      header: 'Scheduled Start',
-      type: 'Timestamp (M/D/YY H:MM)',
-      role: 'Primary Calendar Anchor & Shift',
-      description: 'The planned calendar date and time when maintenance commences. The engine queries the roster on this day and shift to allocate working engineers.',
-      example: '9/29/26 1:00 AM (Nov 12)',
-    },
-    {
-      col: 'Col O',
-      header: 'Finish No Later',
-      type: 'Timestamp (M/D/YY H:MM)',
-      role: 'Hard Regulatory SLA Deadline',
-      description: 'The mandatory completion deadline. Work orders exceeding this date become overdue, triggering the "140 past Finish No Later Than" warning.',
-      example: '10/13/26 2:00 AM',
-    },
-    {
-      col: 'Col Q',
-      header: 'Scheduled Finish',
-      type: 'Timestamp (M/D/YY H:MM)',
-      role: 'Planned Execution End Time',
-      description: 'Planned completion timestamp. Together with Scheduled Start, defines the task duration and prevents assigning the same technician to multiple overlapping tasks.',
-      example: '10/13/26 2:00 AM',
-    },
-    {
-      col: 'Col V',
-      header: 'Line',
-      type: 'L4, L5, L6',
-      role: 'Workforce Department Grouping',
-      description: 'Routes activities to the correct operational crew: Line 4 & 6 combined operational unit, or Line 5 dedicated operational unit.',
-      example: 'L4, L5, L6',
-    },
-  ];
+  const required = columns.filter((c) => c.required).length;
 
   return (
     <Modal
       open={isOpen}
       onClose={onClose}
-      title="Nov-Workorders.xlsx — Mandatory Yellow Headings Guide"
+      title="Work-order Excel — Yellow (mandatory) columns"
       width={880}
     >
       <div className="flex flex-col gap-5 text-ink">
-        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 font-black text-lg">
-            🟡
-          </div>
-          <div className="text-[13px] text-ink-2 leading-relaxed">
-            <h4 className="text-[14px] font-bold text-amber-300 mb-1">
-              The 8 Mandatory Data Pillars (Nov-Workorders.xlsx)
-            </h4>
-            These yellow columns represent the required data backbone extracted from <strong className="text-ink font-mono">Nov-Workorders.xlsx</strong>. The Roster Allocation &amp; Buffer calculation depends on these 8 fields. All other columns (Description, Asset, Status, Department, EUC) are optional and display-only.
-          </div>
+        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-[13px] text-ink-2 leading-relaxed">
+          <h4 className="text-[14px] font-bold text-amber-300 mb-1">
+            Only these {columns.length} columns are read ({required} mandatory)
+          </h4>
+          Columns are matched by <strong className="text-ink">header name</strong>, so their order in Excel doesn&apos;t
+          matter and title rows above the header are fine. Every other column (Status, Asset, SR Affected, Actual
+          Start …) is ignored. A missing column or blank cell is reported, e.g. <em>&quot;Row 45: Scheduled Start missing&quot;</em>.
         </div>
 
         <div className="rounded-2xl border border-[var(--line)] bg-[var(--surface-2)] overflow-hidden shadow-sm">
           <table className="w-full text-left border-collapse text-[13px]">
             <thead>
               <tr className="bg-[var(--surface-3)] border-b border-[var(--line)] text-[11px] uppercase font-bold text-ink-3 tracking-wider">
-                <th className="py-3 px-4 w-16">Col</th>
-                <th className="py-3 px-4">Excel Header</th>
-                <th className="py-3 px-4">Operational Role</th>
-                <th className="py-3 px-4">System Impact &amp; Example</th>
+                <th className="py-3 px-4 w-10">#</th>
+                <th className="py-3 px-4">Excel header</th>
+                <th className="py-3 px-4">Type</th>
+                <th className="py-3 px-4">Used for</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--line)]">
-              {yellowColumns.map((c) => (
-                <tr key={c.col} className="hover:bg-[var(--surface-1)] transition-colors">
-                  <td className="py-3.5 px-4 font-mono font-bold text-amber-400 text-[12px] whitespace-nowrap">
-                    <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30">
-                      {c.col}
-                    </span>
+              {columns.map((c, i) => (
+                <tr key={c.excelHeader}>
+                  <td className="py-3 px-4 font-mono text-ink-3">{i + 1}</td>
+                  <td className="py-3 px-4 whitespace-nowrap">
+                    <span className="px-2 py-0.5 rounded font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">{c.excelHeader}</span>
+                    {c.required && <span className="ml-1.5 text-[10.5px] font-bold text-rose-400">required</span>}
+                    {c.aliases?.length ? (
+                      <div className="mt-1 text-[11px] text-ink-3">also: {c.aliases.join(', ')}</div>
+                    ) : null}
                   </td>
-                  <td className="py-3.5 px-4 font-bold text-ink whitespace-nowrap">
-                    <div>{c.header}</div>
-                    <span className="text-[11px] font-mono text-ink-3">{c.type}</span>
-                  </td>
-                  <td className="py-3.5 px-4 font-semibold text-[12.5px] text-indigo-400">
-                    {c.role}
-                  </td>
-                  <td className="py-3.5 px-4 text-ink-2 text-[12.5px] leading-snug">
-                    <p>{c.description}</p>
-                    <div className="text-[11.5px] font-mono text-ink-3 mt-1">
-                      Example: <span className="text-ink font-semibold">{c.example}</span>
-                    </div>
-                  </td>
+                  <td className="py-3 px-4 font-mono text-[12px] text-ink-3">{c.type}</td>
+                  <td className="py-3 px-4 text-ink-2 text-[12.5px] leading-snug">{c.usedFor}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
 
-        <div className="flex justify-end pt-2">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[12.5px] text-ink-2 leading-relaxed">
+          <div className="p-3.5 rounded-xl bg-[var(--surface-2)] border border-[var(--line)]">
+            <h5 className="font-bold text-ink mb-1">How the dates are used</h5>
+            <strong>Scheduled Start</strong> places the work on the Planner and counts in shift demand.{' '}
+            <strong>Start No Earlier Than → Finish No Later Than</strong> is the allowed window (outside it = flagged; FNLT before today = &quot;past FNLT&quot;).{' '}
+            <strong>Target Start</strong> and <strong>Reported Date</strong> are reference only (target slip, age).
+          </div>
+          <div className="p-3.5 rounded-xl bg-[var(--surface-2)] border border-[var(--line)]">
+            <h5 className="font-bold text-ink mb-1">Not in the file → worked out</h5>
+            <strong>Work type</strong> from the Description:{' '}
+            {WORK_TYPE_RULES.map((r) => `${r.type} if it mentions ${r.pattern.source.replace(/\\b|\(|\)/g, '').split('|').slice(0, 4).join(', ')}…`).join('; ')}; otherwise PM.{' '}
+            <strong>Crew size</strong> from Setup → Work Order Resource Standards.
+          </div>
+        </div>
+
+        <p className="text-[12px] text-ink-3">
+          Need another column? Add it in <strong className="text-ink-2">Setup → Excel import columns</strong> (header, type, mandatory),
+          then import the file again. No code change needed.
+        </p>
+
+        <div className="flex justify-end pt-1">
           <Button variant="primary" onClick={onClose}>
             Got it
           </Button>
         </div>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * First screen for a team with no work orders yet: drop the Excel file here.
+ * After the import the normal Work Orders page appears with the data.
+ */
+function EmptyImport({
+  importing,
+  columns,
+  onPick,
+  onDrop,
+  onGuide,
+}: {
+  importing: boolean;
+  columns: WorkOrderColumn[];
+  onPick: () => void;
+  onDrop: (file: File) => void;
+  onGuide: () => void;
+}) {
+  const [over, setOver] = useState(false);
+  const steps = [
+    { n: 1, title: 'Import your Excel', text: 'Drop the monthly work-order sheet here, or click to choose it.' },
+    { n: 2, title: 'Yellow columns are read', text: `Only the ${columns.length} yellow columns, matched by header name. Problems are listed row by row.` },
+    { n: 3, title: 'Live staffing check', text: 'Every work order is matched to the Planner roster for its day and shift — deficits update as you edit.' },
+  ];
+
+  return (
+    <div className="w-full px-3 sm:px-6 lg:px-10 py-6 sm:py-10">
+      <div className="mx-auto max-w-4xl flex flex-col gap-6">
+        {/* Drop zone */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => !importing && onPick()}
+          onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && !importing && onPick()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setOver(true);
+          }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setOver(false);
+            const file = e.dataTransfer.files?.[0];
+            if (file && !importing) onDrop(file);
+          }}
+          className={`relative overflow-hidden rounded-3xl border-2 border-dashed px-6 py-12 sm:py-16 text-center cursor-pointer transition-all ${
+            over
+              ? 'border-[var(--accent)] bg-[var(--accent)]/10 scale-[1.01]'
+              : 'border-[var(--line-strong)] bg-[var(--surface)] hover:border-[var(--accent)]/60 hover:bg-[var(--surface-2)]'
+          }`}
+        >
+          <div className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 h-48 w-[28rem] rounded-full bg-[var(--accent)]/15 blur-3xl" />
+          <div className="relative flex flex-col items-center gap-4">
+            <div className="grid h-16 w-16 place-items-center rounded-2xl border border-[var(--accent)]/30 bg-[var(--accent)]/15 text-[var(--accent)] shadow-sm">
+              {importing ? (
+                <span className="h-7 w-7 rounded-full border-[3px] border-current/30 border-t-current animate-spin" />
+              ) : (
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <path d="M12 18v-6" />
+                  <path d="M9 15l3-3 3 3" />
+                </svg>
+              )}
+            </div>
+            <div>
+              <h2 className="text-xl sm:text-2xl font-black tracking-tight text-ink">
+                {importing ? 'Reading your work orders…' : 'Import your work orders to get started'}
+              </h2>
+              <p className="mt-2 text-[14px] text-ink-2 max-w-lg mx-auto leading-relaxed">
+                {importing
+                  ? 'Checking the yellow columns and matching every work order to the Planner roster.'
+                  : 'Drag and drop your Excel file here, or click to choose it. Nothing is shown until you import — your data stays in this browser.'}
+              </p>
+            </div>
+            {!importing && (
+              <span className="inline-flex items-center gap-2 rounded-xl bg-[var(--accent)] px-5 py-2.5 text-[14px] font-bold text-[var(--accent-ink)] shadow-md">
+                <Icons.Upload /> Choose Excel file
+              </span>
+            )}
+            <span className="text-[12px] text-ink-3">.xlsx or .xls</span>
+          </div>
+        </div>
+
+        {/* How it works */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {steps.map((st) => (
+            <div key={st.n} className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4">
+              <div className="flex items-center gap-2.5">
+                <span className="grid h-7 w-7 place-items-center rounded-full bg-[var(--accent)]/15 text-[13px] font-black text-[var(--accent)]">
+                  {st.n}
+                </span>
+                <span className="text-[14px] font-bold text-ink">{st.title}</span>
+              </div>
+              <p className="mt-2 text-[12.5px] leading-relaxed text-ink-2">{st.text}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Columns the file needs */}
+        <div className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[13px] font-bold text-ink">Columns your file needs</span>
+            <button type="button" onClick={onGuide} className="text-[12.5px] font-bold text-[var(--accent)] hover:underline">
+              What each column is for →
+            </button>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {columns.map((c) => (
+              <span
+                key={c.excelHeader}
+                title={c.usedFor}
+                className="px-2 py-1 rounded-lg text-[12px] font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-300 border border-amber-500/30"
+              >
+                {c.excelHeader}
+              </span>
+            ))}
+          </div>
+          <p className="mt-3 text-[12px] text-ink-3">
+            Column order doesn&apos;t matter and other columns are ignored. Need another column? Add it in Setup → Excel import columns.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** What the last import found: missing columns (whole file) and row problems. */
+function ImportReport({
+  report,
+  rowProblems,
+}: {
+  report: NonNullable<ReturnType<typeof useStore>['settings']['lastWorkOrderImport']>;
+  rowProblems: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const clean = report.fileErrors.length === 0 && rowProblems.length === 0;
+  return (
+    <div
+      className={`rounded-2xl border p-4 text-[13px] ${
+        clean ? 'border-emerald-500/30 bg-emerald-500/5' : report.fileErrors.length ? 'border-red-500/35 bg-red-500/5' : 'border-amber-500/35 bg-amber-500/5'
+      }`}
+    >
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <span className="font-bold text-ink">Import report</span>
+        <span className="text-ink-2">
+          <span className="font-mono">{report.fileName}</span> · {new Date(report.at).toLocaleString('en-GB')} · {report.rows} rows · header on row {report.headerRow}
+        </span>
+        {clean ? (
+          <span className="font-semibold text-emerald-400">✓ All yellow columns found, no row problems</span>
+        ) : (
+          <>
+            {report.fileErrors.length > 0 && (
+              <span className="font-semibold text-red-400">{report.fileErrors.length} missing column{report.fileErrors.length === 1 ? '' : 's'}</span>
+            )}
+            {rowProblems.length > 0 && (
+              <span className="font-semibold text-amber-400">{rowProblems.length} row problem{rowProblems.length === 1 ? '' : 's'}</span>
+            )}
+            <button type="button" onClick={() => setOpen(!open)} className="font-bold text-[var(--accent)] hover:underline">
+              {open ? 'Hide details' : 'Show details'}
+            </button>
+          </>
+        )}
+      </div>
+      {open && (
+        <ul className="mt-3 max-h-60 overflow-y-auto space-y-1 font-mono text-[12px]">
+          {report.fileErrors.map((e) => (
+            <li key={e} className="text-red-400">✕ {e}</li>
+          ))}
+          {rowProblems.map((e, i) => (
+            <li key={i} className="text-amber-300">⚠ {e}</li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

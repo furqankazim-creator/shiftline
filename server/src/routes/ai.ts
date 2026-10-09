@@ -29,6 +29,8 @@ const askShape = z.object({
       employees: z.array(z.any()),
       codes: z.array(z.any()),
       leave: z.array(z.any()).default([]),
+      /** Live Work Orders / staffing summary rendered by the web app. */
+      workOrders: z.string().max(30000).optional(),
     })
     .optional(),
 });

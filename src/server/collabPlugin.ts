@@ -22,13 +22,12 @@ interface CollabNotification {
 }
 
 interface CollabSettings {
-  sharedPasscode: string;
+  updatedAt: number;
+  assignedPasscodes: Array<{ id: string; passcode: string; assignedTo: string; role: string; status: string; [k: string]: any }>;
   adminPassword: string;
   requireName: boolean;
   notifyOnLogin: boolean;
   soundAlert: boolean;
-  defaultSharedRole: 'collaborator' | 'viewer';
-  recentPasscodes: string[];
 }
 
 // In-Memory Real-Time Collaboration State
@@ -40,20 +39,20 @@ const notificationsList: CollabNotification[] = [
     userName: 'Security Service',
     userRole: 'supervisor',
     timestamp: Date.now() - 1000 * 60 * 15,
-    message: 'Protected access gate active. Default shared passcode: shiftline2026',
+    message: 'Protected access gate active.',
     details: 'You will receive immediate alerts whenever someone unlocks this roster.',
     read: false,
   },
 ];
 
+// updatedAt = 0 means "never configured": the supervisor's browser pushes its saved copy up.
 const currentSettings: CollabSettings = {
-  sharedPasscode: 'shiftline2026',
+  updatedAt: 0,
+  assignedPasscodes: [],
   adminPassword: 'supervisor1',
   requireName: true,
   notifyOnLogin: true,
   soundAlert: true,
-  defaultSharedRole: 'collaborator',
-  recentPasscodes: ['shiftline2026'],
 };
 
 const sseClients = new Set<any>();
@@ -206,12 +205,12 @@ export function collabServerPlugin(): Plugin {
           const role = body.role || 'collaborator';
           const device = body.device || 'Desktop Browser';
 
-          const activeCode = currentSettings.sharedPasscode.trim().toLowerCase();
-          const recent = currentSettings.recentPasscodes.map((p) => p.trim().toLowerCase());
+          // Only a person's own assigned (not revoked) passcode is accepted
           const isValid =
-            cleanPasscode === activeCode ||
-            cleanPasscode === 'shiftline2026' ||
-            recent.includes(cleanPasscode);
+            !!cleanPasscode &&
+            currentSettings.assignedPasscodes.some(
+              (a) => a.status !== 'revoked' && String(a.passcode).trim().toLowerCase() === cleanPasscode,
+            );
 
           if (!isValid) {
             return sendJson(res, 401, {
@@ -393,12 +392,13 @@ export function collabServerPlugin(): Plugin {
           const body = await readJsonBody(req);
           if (body.settings) {
             const s = body.settings;
-            if (s.sharedPasscode) {
-              currentSettings.sharedPasscode = s.sharedPasscode;
-              if (!currentSettings.recentPasscodes.includes(s.sharedPasscode)) {
-                currentSettings.recentPasscodes.push(s.sharedPasscode);
-              }
+            // Ignore stale copies (e.g. an old tab saving after a newer change)
+            if (typeof s.updatedAt === 'number' && s.updatedAt < currentSettings.updatedAt) {
+              return sendJson(res, 200, { ok: true, settings: currentSettings });
             }
+            if (typeof s.updatedAt === 'number') currentSettings.updatedAt = s.updatedAt;
+            if (Array.isArray(s.assignedPasscodes)) currentSettings.assignedPasscodes = s.assignedPasscodes;
+            if (s.adminPassword) currentSettings.adminPassword = s.adminPassword;
             if (typeof s.notifyOnLogin === 'boolean') currentSettings.notifyOnLogin = s.notifyOnLogin;
             if (typeof s.soundAlert === 'boolean') currentSettings.soundAlert = s.soundAlert;
             if (typeof s.requireName === 'boolean') currentSettings.requireName = s.requireName;

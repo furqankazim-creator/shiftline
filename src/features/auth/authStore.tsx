@@ -11,6 +11,7 @@ import React, {
 import { useToast } from '@/components/ui';
 
 import { playNotificationChime } from './sound';
+import { matchPasscode } from './types';
 import type {
   AssignedPasscode,
   CollabBroadcastMessage,
@@ -56,27 +57,40 @@ export const DEFAULT_ASSIGNED_PASSCODES: AssignedPasscode[] = [
     status: 'active',
     notes: 'Operations Line Staff direct link',
   },
-  {
-    id: 'assign-general',
-    assignedTo: 'General Team & Clients',
-    passcode: 'shiftline2026',
-    role: 'collaborator',
-    createdAt: Date.now() - 86400000 * 5,
-    status: 'active',
-    notes: 'Standard Shared Passcode link',
-  },
 ];
 
 const DEFAULT_SETTINGS: SecuritySettings = {
-  sharedPasscode: 'shiftline2026',
-  recentPasscodes: ['shiftline2026', 'shift-hasnain-92', 'shift-arif-44', 'shift-latif-71'],
+  updatedAt: 0,
   assignedPasscodes: DEFAULT_ASSIGNED_PASSCODES,
   adminPassword: 'supervisor1',
   requireName: true,
   notifyOnLogin: true,
   soundAlert: true,
-  defaultSharedRole: 'collaborator',
 };
+
+/**
+ * Fills in defaults for settings coming from storage, other tabs or the server.
+ * An empty assigned list is kept as-is (all links revoked). Leftover fields from the
+ * removed shared-passcode feature (and its 'assign-general' row) are dropped.
+ */
+export function normalizeSecuritySettings(raw: Partial<SecuritySettings> | null | undefined): SecuritySettings {
+  const { sharedPasscode: _s, accessMode: _m, defaultSharedRole: _r, recentPasscodes: _p, ...rest } =
+    (raw || {}) as Partial<SecuritySettings> & Record<string, unknown>;
+  const assigned = Array.isArray(raw?.assignedPasscodes) ? raw!.assignedPasscodes! : DEFAULT_ASSIGNED_PASSCODES;
+  return {
+    ...DEFAULT_SETTINGS,
+    ...rest,
+    assignedPasscodes: assigned.filter((a) => a && a.id !== 'assign-general' && a.passcode),
+  };
+}
+
+function persistSettingsLocally(settings: SecuritySettings) {
+  try {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    /* ignore */
+  }
+}
 
 function getStoredPresenceRegistry(): Record<string, PresenceUser> {
   try {
@@ -125,18 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [securitySettings, setSecuritySettings] = useState<SecuritySettings>(() => {
     try {
       const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        return {
-          ...DEFAULT_SETTINGS,
-          ...parsed,
-          assignedPasscodes:
-            parsed.assignedPasscodes && parsed.assignedPasscodes.length > 0
-              ? parsed.assignedPasscodes
-              : DEFAULT_ASSIGNED_PASSCODES,
-        };
-      }
-      return DEFAULT_SETTINGS;
+      return normalizeSecuritySettings(stored ? JSON.parse(stored) : null);
     } catch {
       return DEFAULT_SETTINGS;
     }
@@ -214,26 +217,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Save Settings & Broadcast to all open tabs
   const updateSecuritySettings = useCallback((patch: Partial<SecuritySettings>) => {
     setSecuritySettings((prev) => {
-      const recentList = new Set(prev.recentPasscodes || []);
-      if (prev.sharedPasscode) recentList.add(prev.sharedPasscode.trim());
-      if (patch.sharedPasscode) recentList.add(patch.sharedPasscode.trim());
-      if (patch.assignedPasscodes) {
-        patch.assignedPasscodes.forEach((a) => {
-          if (a.passcode) recentList.add(a.passcode.trim());
-        });
-      }
-
-      const next: SecuritySettings = {
-        ...prev,
-        ...patch,
-        recentPasscodes: Array.from(recentList),
-      };
-
-      try {
-        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        /* ignore */
-      }
+      const next = normalizeSecuritySettings({ ...prev, ...patch, updatedAt: Date.now() });
+      persistSettingsLocally(next);
 
       if (channelRef.current) {
         channelRef.current.postMessage({
@@ -326,28 +311,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setActiveUsers(list);
   }, []);
 
-  // Parse passcode from URL query param if present
-  useEffect(() => {
-    try {
-      const urlParams = new URLSearchParams(window.location.search);
-      let codeFromUrl = urlParams.get('code') || urlParams.get('passcode') || urlParams.get('p');
-      if (!codeFromUrl && window.location.hash.includes('?')) {
-        const hashQuery = window.location.hash.split('?')[1];
-        if (hashQuery) {
-          const hashParams = new URLSearchParams(hashQuery);
-          codeFromUrl = hashParams.get('code') || hashParams.get('passcode') || hashParams.get('p');
-        }
-      }
-      if (codeFromUrl) {
-        const clean = decodeURIComponent(codeFromUrl).trim();
-        if (clean) {
-          updateSecuritySettings({ sharedPasscode: clean });
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-  }, [updateSecuritySettings]);
+  // Note: a ?code= in the URL only pre-fills the login form (see LoginGate);
+  // it must never change the stored passcode, or any link would unlock itself.
 
   // Save Notifications
   useEffect(() => {
@@ -415,7 +380,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (!msg || !msg.type) return;
 
           if (msg.type === 'INIT_SYNC') {
-            if (msg.settings) setSecuritySettings(msg.settings);
+            // Newer copy wins: adopt the server's settings, or push ours up if the
+            // server restarted and lost them (it starts with updatedAt = 0).
+            const local = securitySettingsRef.current;
+            const serverUpdatedAt = msg.settings?.updatedAt || 0;
+            if (msg.settings && serverUpdatedAt >= (local.updatedAt || 0)) {
+              const incoming = normalizeSecuritySettings(msg.settings);
+              persistSettingsLocally(incoming);
+              setSecuritySettings(incoming);
+            } else if ((local.updatedAt || 0) > serverUpdatedAt) {
+              fetch('/api/collab/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ settings: local }),
+              }).catch(() => {});
+            }
             if (Array.isArray(msg.notifications)) {
               const stored = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
               if (stored === '[]') {
@@ -505,8 +484,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               updatePresenceFromList(msg.users);
             }
           } else if (msg.type === 'SECURITY_SETTINGS_SYNC') {
-            if (msg.settings) {
-              setSecuritySettings(msg.settings);
+            if (msg.settings && (msg.settings.updatedAt || 0) >= (securitySettingsRef.current.updatedAt || 0)) {
+              const incoming = normalizeSecuritySettings(msg.settings);
+              persistSettingsLocally(incoming);
+              setSecuritySettings(incoming);
             }
           }
         } catch {
@@ -540,7 +521,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!msg) return;
 
         if (msg.type === 'SECURITY_SETTINGS_SYNC') {
-          setSecuritySettings(msg.settings);
+          setSecuritySettings(normalizeSecuritySettings(msg.settings));
         } else if (msg.type === 'LOGIN_ALERT') {
           // Record notification
           setNotifications((prev) => {
@@ -753,7 +734,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const onStorage = (e: StorageEvent) => {
       if (e.key === SETTINGS_STORAGE_KEY && e.newValue) {
         try {
-          setSecuritySettings(JSON.parse(e.newValue));
+          setSecuritySettings(normalizeSecuritySettings(JSON.parse(e.newValue)));
         } catch {}
       } else if (e.key === PRESENCE_REGISTRY_KEY) {
         syncPresenceState();
@@ -810,7 +791,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, []);
 
-  // Login With Shared Passcode
+  // Login With Assigned Passcode
   const loginWithPasscode = useCallback(
     (name: string, passcode: string, role: UserRole = 'collaborator') => {
       const cleanPasscode = passcode.trim().toLowerCase();
@@ -821,26 +802,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
         if (stored) {
-          latestSettings = { ...securitySettingsRef.current, ...JSON.parse(stored) };
+          const parsed = normalizeSecuritySettings(JSON.parse(stored));
+          if ((parsed.updatedAt || 0) >= (latestSettings.updatedAt || 0)) latestSettings = parsed;
         }
       } catch {
         /* ignore */
       }
 
-      const activeCode = (latestSettings.sharedPasscode || '').trim().toLowerCase();
-      const defaultCode = DEFAULT_SETTINGS.sharedPasscode.toLowerCase();
-      const recentList = (latestSettings.recentPasscodes || []).map((p) => p.trim().toLowerCase());
-      const assignedMatch = (latestSettings.assignedPasscodes || []).find(
-        (a) => a.status !== 'revoked' && a.passcode.trim().toLowerCase() === cleanPasscode,
-      );
-
-      const isValid =
-        cleanPasscode === activeCode ||
-        cleanPasscode === defaultCode ||
-        recentList.includes(cleanPasscode) ||
-        !!assignedMatch;
-
-      if (!isValid) {
+      // Only a person's own assigned (not revoked) passcode unlocks the roster
+      const assignedMatch = matchPasscode(latestSettings, cleanPasscode);
+      if (!assignedMatch) {
         return false;
       }
 
@@ -851,7 +822,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         updateSecuritySettings({ assignedPasscodes: updatedList });
       }
 
-      const effectiveRole = assignedMatch?.role || role;
+      const effectiveRole = assignedMatch.role || role;
       const effectiveName = (cleanName && cleanName !== 'Team Member')
         ? cleanName
         : (assignedMatch?.assignedTo || cleanName);
@@ -1125,7 +1096,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         userRole: 'collaborator',
         timestamp: Date.now(),
         message: `${customName} logged in via shared link`,
-        details: `Access validated using passcode "${securitySettingsRef.current.sharedPasscode}".`,
+        details: 'Access validated using an assigned passcode.',
         read: false,
       };
 

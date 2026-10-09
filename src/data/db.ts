@@ -1,3 +1,4 @@
+import type { WorkOrderColumn } from '@/domain/workOrderColumns';
 import Dexie, { type EntityTable } from 'dexie';
 
 import type {
@@ -57,6 +58,24 @@ export interface Settings {
    * than carrying the current month across.
    */
   lineMonths?: Record<string, { year: number; month: number }>;
+  /**
+   * Extra Excel columns added in Setup → Excel import columns. Read on top of
+   * the built-in yellow columns (see domain/workOrderColumns.ts).
+   */
+  customWorkOrderColumns?: WorkOrderColumn[];
+  /** Report of the last work-order Excel import, shown on the Work Orders page. */
+  lastWorkOrderImport?: WorkOrderImportReport;
+}
+
+export interface WorkOrderImportReport {
+  fileName: string;
+  at: number;
+  rows: number;
+  headerRow: number;
+  /** Whole-file problems, e.g. a configured column not found. */
+  fileErrors: string[];
+  /** Rows with at least one problem. */
+  problemRows: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -234,10 +253,9 @@ class RosterDB extends Dexie {
       resourceRequirements: 'id, line, workType, shift',
       allocations: 'id, workOrderId, personId, allocatedDate, shift',
     }).upgrade(async (tx) => {
-      const woTable = tx.table('workOrders');
+      // Work orders are never seeded: each team starts empty and imports its own file
       const rrTable = tx.table('resourceRequirements');
       await rrTable.bulkPut(SEED_RESOURCE_REQUIREMENTS);
-      await woTable.bulkPut(SEED_WORK_ORDERS);
     });
   }
 }
@@ -257,10 +275,13 @@ export async function ensureSeeded(): Promise<void> {
   // Always ensure line 6 is present in lines table
   await db.lines.bulkPut(SEED_LINES);
 
-  // Ensure work orders and resource requirements are present
-  const woCount = await db.workOrders.count();
-  if (woCount === 0) {
-    await db.workOrders.bulkPut(SEED_WORK_ORDERS);
+  // Work orders start empty (the Work Orders page shows an import screen).
+  // Older versions seeded 9 demo work orders — remove them while they're
+  // still the untouched demo set; anything imported is left alone.
+  const demoIds = new Set(SEED_WORK_ORDERS.map((w) => w.id));
+  const current = await db.workOrders.toArray();
+  if (current.length > 0 && current.every((w) => demoIds.has(w.id))) {
+    await db.workOrders.clear();
   }
   const rrCount = await db.resourceRequirements.count();
   if (rrCount === 0) {
