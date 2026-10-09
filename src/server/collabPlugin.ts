@@ -118,8 +118,16 @@ function sendJson(res: any, status: number, data: any) {
   res.end(JSON.stringify(data));
 }
 
-// Background cleanup: Prune users who haven't sent heartbeat in 75s
-setInterval(() => {
+// Background cleanup: prune users who haven't sent a heartbeat in 75s.
+// Started from configureServer (dev server only) — a module-level timer would
+// keep `vite build` alive forever, which hangs CI / Vercel builds.
+let pruneTimer: ReturnType<typeof setInterval> | null = null;
+function startPruning() {
+  if (pruneTimer) return;
+  pruneTimer = setInterval(pruneInactiveUsers, 5000);
+}
+
+function pruneInactiveUsers() {
   const now = Date.now();
   let changed = false;
 
@@ -136,12 +144,13 @@ setInterval(() => {
       users: getActiveUsersList(),
     });
   }
-}, 5000);
+}
 
 export function collabServerPlugin(): Plugin {
   return {
     name: 'collab-server',
     configureServer(server) {
+      startPruning();
       server.middlewares.use(async (req: any, res: any, next: any) => {
         const url = req.url || '';
 
